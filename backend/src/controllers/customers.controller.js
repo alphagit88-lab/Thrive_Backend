@@ -1,9 +1,12 @@
 /**
- * Customers Controller
+ * Customers Controller - TypeORM Version
  * Handles customer management - Location dependent
  */
 
-const pool = require('../database/dbconn');
+const { getDataSource } = require('../database/typeorm');
+const { Customer } = require('../entities/Customer.entity');
+const { Location } = require('../entities/Location.entity');
+const { Order } = require('../entities/Order.entity');
 const { AppError, asyncHandler } = require('../middleware/errorHandler');
 
 // @desc    Get all customers (filtered by location)
@@ -15,35 +18,38 @@ const getCustomers = asyncHandler(async (req, res) => {
     throw new AppError('Location ID is required', 400);
   }
   
-  let query = `
-    SELECT 
-      c.*,
-      l.name as location_name
-    FROM customers c
-    JOIN locations l ON c.location_id = l.id
-    WHERE c.location_id = $1
-  `;
+  const dataSource = await getDataSource();
+  const customerRepo = dataSource.getRepository(Customer);
   
-  const params = [location_id];
+  const queryBuilder = customerRepo
+    .createQueryBuilder('customer')
+    .leftJoinAndSelect('customer.location', 'location')
+    .where('customer.location_id = :locationId', { locationId: location_id })
+    .orderBy('customer.created_at', 'DESC');
   
   if (search) {
-    params.push(`%${search}%`);
-    query += ` AND (c.name ILIKE $${params.length} OR c.email ILIKE $${params.length} OR c.contact_number ILIKE $${params.length})`;
+    queryBuilder.andWhere(
+      '(customer.name ILIKE :search OR customer.email ILIKE :search OR customer.contact_number ILIKE :search)',
+      { search: `%${search}%` }
+    );
   }
   
   if (status) {
-    params.push(status);
-    query += ` AND c.account_status = $${params.length}`;
+    queryBuilder.andWhere('customer.account_status = :status', { status });
   }
   
-  query += ' ORDER BY c.created_at DESC';
+  const customers = await queryBuilder.getMany();
   
-  const result = await pool.query(query, params);
+  // Format response
+  const formatted = customers.map(customer => ({
+    ...customer,
+    location_name: customer.location?.name
+  }));
   
   res.status(200).json({
     success: true,
-    count: result.rows.length,
-    data: result.rows
+    count: formatted.length,
+    data: formatted
   });
 });
 
@@ -51,34 +57,32 @@ const getCustomers = asyncHandler(async (req, res) => {
 // @route   GET /api/customers/:id
 const getCustomer = asyncHandler(async (req, res) => {
   const { id } = req.params;
+  const dataSource = await getDataSource();
+  const customerRepo = dataSource.getRepository(Customer);
   
-  const result = await pool.query(`
-    SELECT 
-      c.*,
-      l.name as location_name
-    FROM customers c
-    JOIN locations l ON c.location_id = l.id
-    WHERE c.id = $1
-  `, [id]);
+  const customer = await customerRepo.findOne({
+    where: { id },
+    relations: ['location']
+  });
   
-  if (result.rows.length === 0) {
+  if (!customer) {
     throw new AppError('Customer not found', 404);
   }
   
   // Get customer's recent orders
-  const orders = await pool.query(`
-    SELECT id, order_number, status, total_price, order_date
-    FROM orders
-    WHERE customer_id = $1
-    ORDER BY order_date DESC
-    LIMIT 10
-  `, [id]);
+  const orders = await dataSource.getRepository(Order).find({
+    where: { customer_id: id },
+    order: { order_date: 'DESC' },
+    take: 10,
+    select: ['id', 'order_number', 'status', 'total_price', 'order_date']
+  });
   
   res.status(200).json({
     success: true,
     data: {
-      ...result.rows[0],
-      recent_orders: orders.rows
+      ...customer,
+      location_name: customer.location?.name,
+      recent_orders: orders
     }
   });
 });
@@ -92,16 +96,22 @@ const createCustomer = asyncHandler(async (req, res) => {
     throw new AppError('Location ID, email, and name are required', 400);
   }
   
-  const result = await pool.query(
-    `INSERT INTO customers (location_id, email, name, contact_number, address)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING *`,
-    [location_id, email, name, contact_number, address]
-  );
+  const dataSource = await getDataSource();
+  const customerRepo = dataSource.getRepository(Customer);
+  
+  const customer = customerRepo.create({
+    location_id,
+    email,
+    name,
+    contact_number: contact_number || null,
+    address: address || null
+  });
+  
+  const saved = await customerRepo.save(customer);
   
   res.status(201).json({
     success: true,
-    data: result.rows[0]
+    data: saved
   });
 });
 
@@ -111,26 +121,26 @@ const updateCustomer = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { email, name, contact_number, address, account_status } = req.body;
   
-  const result = await pool.query(
-    `UPDATE customers 
-     SET email = COALESCE($1, email),
-         name = COALESCE($2, name),
-         contact_number = COALESCE($3, contact_number),
-         address = COALESCE($4, address),
-         account_status = COALESCE($5, account_status),
-         updated_at = CURRENT_TIMESTAMP
-     WHERE id = $6
-     RETURNING *`,
-    [email, name, contact_number, address, account_status, id]
-  );
+  const dataSource = await getDataSource();
+  const customerRepo = dataSource.getRepository(Customer);
   
-  if (result.rows.length === 0) {
+  const customer = await customerRepo.findOne({ where: { id } });
+  
+  if (!customer) {
     throw new AppError('Customer not found', 404);
   }
   
+  if (email !== undefined) customer.email = email;
+  if (name !== undefined) customer.name = name;
+  if (contact_number !== undefined) customer.contact_number = contact_number;
+  if (address !== undefined) customer.address = address;
+  if (account_status !== undefined) customer.account_status = account_status;
+  
+  const updated = await customerRepo.save(customer);
+  
   res.status(200).json({
     success: true,
-    data: result.rows[0]
+    data: updated
   });
 });
 
@@ -138,10 +148,12 @@ const updateCustomer = asyncHandler(async (req, res) => {
 // @route   DELETE /api/customers/:id
 const deleteCustomer = asyncHandler(async (req, res) => {
   const { id } = req.params;
+  const dataSource = await getDataSource();
+  const customerRepo = dataSource.getRepository(Customer);
   
-  const result = await pool.query('DELETE FROM customers WHERE id = $1 RETURNING *', [id]);
+  const result = await customerRepo.delete({ id });
   
-  if (result.rows.length === 0) {
+  if (result.affected === 0) {
     throw new AppError('Customer not found', 404);
   }
   
@@ -158,4 +170,3 @@ module.exports = {
   updateCustomer,
   deleteCustomer
 };
-
