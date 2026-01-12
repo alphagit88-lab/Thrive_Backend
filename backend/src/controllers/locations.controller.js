@@ -1,9 +1,9 @@
 /**
- * Locations Controller
- * Handles all location-related operations
+ * Locations Controller - TypeORM Version
  */
 
-const pool = require('../database/dbconn');
+const { getDataSource } = require('../database/typeorm');
+const { Location } = require('../entities/Location.entity');
 const { AppError, asyncHandler } = require('../middleware/errorHandler');
 
 // @desc    Get all locations
@@ -11,28 +11,27 @@ const { AppError, asyncHandler } = require('../middleware/errorHandler');
 // @access  Public
 const getLocations = asyncHandler(async (req, res) => {
   const { search, status } = req.query;
+  const dataSource = await getDataSource();
+  const locationRepo = dataSource.getRepository(Location);
   
-  let query = 'SELECT * FROM locations WHERE 1=1';
-  const params = [];
+  const queryBuilder = locationRepo.createQueryBuilder('location');
   
   if (search) {
-    params.push(`%${search}%`);
-    query += ` AND name ILIKE $${params.length}`;
+    queryBuilder.where('location.name ILIKE :search', { search: `%${search}%` });
   }
   
   if (status) {
-    params.push(status);
-    query += ` AND status = $${params.length}`;
+    queryBuilder.andWhere('location.status = :status', { status });
   }
   
-  query += ' ORDER BY created_at DESC';
+  queryBuilder.orderBy('location.created_at', 'DESC');
   
-  const result = await pool.query(query, params);
+  const locations = await queryBuilder.getMany();
   
   res.status(200).json({
     success: true,
-    count: result.rows.length,
-    data: result.rows
+    count: locations.length,
+    data: locations
   });
 });
 
@@ -41,16 +40,20 @@ const getLocations = asyncHandler(async (req, res) => {
 // @access  Public
 const getLocation = asyncHandler(async (req, res) => {
   const { id } = req.params;
+  const dataSource = await getDataSource();
+  const locationRepo = dataSource.getRepository(Location);
   
-  const result = await pool.query('SELECT * FROM locations WHERE id = $1', [id]);
+  const location = await locationRepo.findOne({
+    where: { id }
+  });
   
-  if (result.rows.length === 0) {
+  if (!location) {
     throw new AppError('Location not found', 404);
   }
   
   res.status(200).json({
     success: true,
-    data: result.rows[0]
+    data: location
   });
 });
 
@@ -64,16 +67,23 @@ const createLocation = asyncHandler(async (req, res) => {
     throw new AppError('Location name is required', 400);
   }
   
-  const result = await pool.query(
-    `INSERT INTO locations (name, currency, location_type, address, phone, status)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING *`,
-    [name, currency, location_type, address, phone, status]
-  );
+  const dataSource = await getDataSource();
+  const locationRepo = dataSource.getRepository(Location);
+  
+  const location = locationRepo.create({
+    name,
+    currency,
+    location_type,
+    address,
+    phone,
+    status
+  });
+  
+  const savedLocation = await locationRepo.save(location);
   
   res.status(201).json({
     success: true,
-    data: result.rows[0]
+    data: savedLocation
   });
 });
 
@@ -84,29 +94,28 @@ const updateLocation = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { name, currency, location_type, address, phone, status } = req.body;
   
-  // Check if location exists
-  const existing = await pool.query('SELECT * FROM locations WHERE id = $1', [id]);
-  if (existing.rows.length === 0) {
+  const dataSource = await getDataSource();
+  const locationRepo = dataSource.getRepository(Location);
+  
+  const location = await locationRepo.findOne({ where: { id } });
+  
+  if (!location) {
     throw new AppError('Location not found', 404);
   }
   
-  const result = await pool.query(
-    `UPDATE locations 
-     SET name = COALESCE($1, name),
-         currency = COALESCE($2, currency),
-         location_type = COALESCE($3, location_type),
-         address = COALESCE($4, address),
-         phone = COALESCE($5, phone),
-         status = COALESCE($6, status),
-         updated_at = CURRENT_TIMESTAMP
-     WHERE id = $7
-     RETURNING *`,
-    [name, currency, location_type, address, phone, status, id]
-  );
+  // Update fields
+  if (name !== undefined) location.name = name;
+  if (currency !== undefined) location.currency = currency;
+  if (location_type !== undefined) location.location_type = location_type;
+  if (address !== undefined) location.address = address;
+  if (phone !== undefined) location.phone = phone;
+  if (status !== undefined) location.status = status;
+  
+  const updatedLocation = await locationRepo.save(location);
   
   res.status(200).json({
     success: true,
-    data: result.rows[0]
+    data: updatedLocation
   });
 });
 
@@ -115,10 +124,12 @@ const updateLocation = asyncHandler(async (req, res) => {
 // @access  Private
 const deleteLocation = asyncHandler(async (req, res) => {
   const { id } = req.params;
+  const dataSource = await getDataSource();
+  const locationRepo = dataSource.getRepository(Location);
   
-  const result = await pool.query('DELETE FROM locations WHERE id = $1 RETURNING *', [id]);
+  const result = await locationRepo.delete({ id });
   
-  if (result.rows.length === 0) {
+  if (result.affected === 0) {
     throw new AppError('Location not found', 404);
   }
   
@@ -135,4 +146,3 @@ module.exports = {
   updateLocation,
   deleteLocation
 };
-
