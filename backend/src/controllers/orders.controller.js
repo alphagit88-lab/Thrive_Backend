@@ -1,9 +1,14 @@
 /**
- * Orders Controller
+ * Orders Controller - TypeORM Version
  * Handles orders (preps) - Location dependent
  */
 
-const pool = require('../database/dbconn');
+const { getDataSource } = require('../database/typeorm');
+const { Order } = require('../entities/Order.entity');
+const { OrderItem } = require('../entities/OrderItem.entity');
+const { Location } = require('../entities/Location.entity');
+const { Customer } = require('../entities/Customer.entity');
+const { MenuItem } = require('../entities/MenuItem.entity');
 const { AppError, asyncHandler } = require('../middleware/errorHandler');
 
 // @desc    Get all orders (filtered by location)
@@ -15,65 +20,84 @@ const getOrders = asyncHandler(async (req, res) => {
     throw new AppError('Location ID is required', 400);
   }
   
-  let query = `
-    SELECT 
-      o.*,
-      c.name as customer_name,
-      c.email as customer_email,
-      c.contact_number as customer_phone,
-      l.name as location_name,
-      COALESCE(
-        json_agg(
-          json_build_object(
-            'id', oi.id,
-            'menu_item_id', oi.menu_item_id,
-            'menu_item_name', m.name,
-            'quantity', oi.quantity,
-            'unit_price', oi.unit_price,
-            'total_price', oi.total_price
-          ) ORDER BY oi.created_at
-        ) FILTER (WHERE oi.id IS NOT NULL),
-        '[]'
-      ) as items
-    FROM orders o
-    JOIN locations l ON o.location_id = l.id
-    LEFT JOIN customers c ON o.customer_id = c.id
-    LEFT JOIN order_items oi ON o.id = oi.order_id
-    LEFT JOIN menu_items m ON oi.menu_item_id = m.id
-    WHERE o.location_id = $1
-  `;
+  const dataSource = await getDataSource();
+  const orderRepo = dataSource.getRepository(Order);
   
-  const params = [location_id];
+  const queryBuilder = orderRepo
+    .createQueryBuilder('order')
+    .leftJoinAndSelect('order.location', 'location')
+    .leftJoinAndSelect('order.customer', 'customer')
+    .where('order.location_id = :locationId', { locationId: location_id })
+    .orderBy('order.order_date', 'DESC');
   
   if (status) {
-    params.push(status);
-    query += ` AND o.status = $${params.length}`;
+    queryBuilder.andWhere('order.status = :status', { status });
   }
   
   if (customer_id) {
-    params.push(customer_id);
-    query += ` AND o.customer_id = $${params.length}`;
+    queryBuilder.andWhere('order.customer_id = :customerId', { customerId: customer_id });
   }
   
   if (date_from) {
-    params.push(date_from);
-    query += ` AND o.order_date >= $${params.length}`;
+    queryBuilder.andWhere('order.order_date >= :dateFrom', { dateFrom: date_from });
   }
   
   if (date_to) {
-    params.push(date_to);
-    query += ` AND o.order_date <= $${params.length}`;
+    queryBuilder.andWhere('order.order_date <= :dateTo', { dateTo: date_to });
   }
   
-  query += ` GROUP BY o.id, c.name, c.email, c.contact_number, l.name
-             ORDER BY o.order_date DESC`;
+  const orders = await queryBuilder.getMany();
   
-  const result = await pool.query(query, params);
+  // Get order items for all orders
+  const orderIds = orders.map(o => o.id);
+  const orderItems = orderIds.length > 0
+    ? await dataSource.getRepository(OrderItem).find({
+        where: orderIds.map(id => ({ order_id: id })),
+        order: { created_at: 'ASC' }
+      })
+    : [];
+  
+  // Get menu items for order items
+  const menuItemIds = [...new Set(orderItems.map(oi => oi.menu_item_id).filter(Boolean))];
+  const menuItems = menuItemIds.length > 0
+    ? await dataSource.getRepository(MenuItem).find({
+        where: menuItemIds.map(id => ({ id }))
+      })
+    : [];
+  
+  const menuItemsMap = {};
+  menuItems.forEach(mi => { menuItemsMap[mi.id] = mi; });
+  
+  // Group order items by order_id
+  const itemsByOrder = {};
+  orderItems.forEach(oi => {
+    if (!itemsByOrder[oi.order_id]) {
+      itemsByOrder[oi.order_id] = [];
+    }
+    itemsByOrder[oi.order_id].push({
+      id: oi.id,
+      menu_item_id: oi.menu_item_id,
+      menu_item_name: menuItemsMap[oi.menu_item_id]?.name,
+      quantity: oi.quantity,
+      unit_price: oi.unit_price,
+      total_price: oi.total_price
+    });
+  });
+  
+  // Format response
+  const formatted = orders.map(order => ({
+    ...order,
+    customer_name: order.customer?.name,
+    customer_email: order.customer?.email,
+    customer_phone: order.customer?.contact_number,
+    location_name: order.location?.name,
+    items: itemsByOrder[order.id] || []
+  }));
   
   res.status(200).json({
     success: true,
-    count: result.rows.length,
-    data: result.rows
+    count: formatted.length,
+    data: formatted
   });
 });
 
@@ -81,41 +105,51 @@ const getOrders = asyncHandler(async (req, res) => {
 // @route   GET /api/orders/:id
 const getOrder = asyncHandler(async (req, res) => {
   const { id } = req.params;
+  const dataSource = await getDataSource();
+  const orderRepo = dataSource.getRepository(Order);
   
-  const result = await pool.query(`
-    SELECT 
-      o.*,
-      c.name as customer_name,
-      c.email as customer_email,
-      c.contact_number as customer_phone,
-      l.name as location_name
-    FROM orders o
-    JOIN locations l ON o.location_id = l.id
-    LEFT JOIN customers c ON o.customer_id = c.id
-    WHERE o.id = $1
-  `, [id]);
+  const order = await orderRepo.findOne({
+    where: { id },
+    relations: ['location', 'customer']
+  });
   
-  if (result.rows.length === 0) {
+  if (!order) {
     throw new AppError('Order not found', 404);
   }
   
   // Get order items
-  const items = await pool.query(`
-    SELECT 
-      oi.*,
-      m.name as menu_item_name,
-      m.description as menu_item_description
-    FROM order_items oi
-    LEFT JOIN menu_items m ON oi.menu_item_id = m.id
-    WHERE oi.order_id = $1
-    ORDER BY oi.created_at
-  `, [id]);
+  const orderItems = await dataSource.getRepository(OrderItem).find({
+    where: { order_id: id },
+    order: { created_at: 'ASC' }
+  });
+  
+  // Get menu items
+  const menuItemIds = orderItems.map(oi => oi.menu_item_id).filter(Boolean);
+  const menuItems = menuItemIds.length > 0
+    ? await dataSource.getRepository(MenuItem).find({
+        where: menuItemIds.map(id => ({ id }))
+      })
+    : [];
+  
+  const menuItemsMap = {};
+  menuItems.forEach(mi => { menuItemsMap[mi.id] = mi; });
+  
+  // Format order items
+  const items = orderItems.map(oi => ({
+    ...oi,
+    menu_item_name: menuItemsMap[oi.menu_item_id]?.name,
+    menu_item_description: menuItemsMap[oi.menu_item_id]?.description
+  }));
   
   res.status(200).json({
     success: true,
     data: {
-      ...result.rows[0],
-      items: items.rows
+      ...order,
+      customer_name: order.customer?.name,
+      customer_email: order.customer?.email,
+      customer_phone: order.customer?.contact_number,
+      location_name: order.location?.name,
+      items: items
     }
   });
 });
@@ -127,7 +161,7 @@ const createOrder = asyncHandler(async (req, res) => {
     location_id,
     customer_id,
     notes,
-    items = []  // Array of { menu_item_id, quantity, unit_price }
+    items = []
   } = req.body;
   
   if (!location_id) {
@@ -138,10 +172,11 @@ const createOrder = asyncHandler(async (req, res) => {
     throw new AppError('At least one item is required', 400);
   }
   
-  const client = await pool.connect();
+  const dataSource = await getDataSource();
   
-  try {
-    await client.query('BEGIN');
+  await dataSource.transaction(async (manager) => {
+    const orderRepo = manager.getRepository(Order);
+    const orderItemRepo = manager.getRepository(OrderItem);
     
     // Calculate total price
     let totalPrice = 0;
@@ -150,50 +185,47 @@ const createOrder = asyncHandler(async (req, res) => {
     }
     
     // Generate order number
-    const orderCount = await client.query(
-      'SELECT COUNT(*) as count FROM orders WHERE location_id = $1',
-      [location_id]
-    );
-    const orderNumber = `ORD-${String(parseInt(orderCount.rows[0].count) + 1).padStart(5, '0')}`;
+    const orderCount = await orderRepo.count({
+      where: { location_id }
+    });
+    const orderNumber = `ORD-${String(orderCount + 1).padStart(5, '0')}`;
     
     // Create order
-    const orderResult = await client.query(
-      `INSERT INTO orders (location_id, customer_id, order_number, status, total_price, notes)
-       VALUES ($1, $2, $3, 'received', $4, $5)
-       RETURNING *`,
-      [location_id, customer_id || null, orderNumber, totalPrice, notes]
-    );
+    const order = orderRepo.create({
+      location_id,
+      customer_id: customer_id || null,
+      order_number: orderNumber,
+      status: 'received',
+      total_price: totalPrice,
+      notes: notes || null
+    });
     
-    const order = orderResult.rows[0];
+    const savedOrder = await orderRepo.save(order);
     
     // Create order items
     const createdItems = [];
     for (const item of items) {
       const itemTotal = (item.unit_price || 0) * (item.quantity || 1);
-      const itemResult = await client.query(
-        `INSERT INTO order_items (order_id, menu_item_id, quantity, unit_price, total_price, notes)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING *`,
-        [order.id, item.menu_item_id, item.quantity || 1, item.unit_price || 0, itemTotal, item.notes || null]
-      );
-      createdItems.push(itemResult.rows[0]);
+      const orderItem = orderItemRepo.create({
+        order_id: savedOrder.id,
+        menu_item_id: item.menu_item_id || null,
+        quantity: item.quantity || 1,
+        unit_price: item.unit_price || 0,
+        total_price: itemTotal,
+        notes: item.notes || null
+      });
+      const saved = await orderItemRepo.save(orderItem);
+      createdItems.push(saved);
     }
-    
-    await client.query('COMMIT');
     
     res.status(201).json({
       success: true,
       data: {
-        ...order,
+        ...savedOrder,
         items: createdItems
       }
     });
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 });
 
 // @desc    Update order status
@@ -211,28 +243,25 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
     throw new AppError(`Invalid status. Must be one of: ${validStatuses.join(', ')}`, 400);
   }
   
-  let updateQuery = `
-    UPDATE orders 
-    SET status = $1,
-        updated_at = CURRENT_TIMESTAMP
-  `;
+  const dataSource = await getDataSource();
+  const orderRepo = dataSource.getRepository(Order);
   
-  // Set delivered_at if status is delivered
-  if (status === 'delivered') {
-    updateQuery += `, delivered_at = CURRENT_TIMESTAMP`;
-  }
+  const order = await orderRepo.findOne({ where: { id } });
   
-  updateQuery += ` WHERE id = $2 RETURNING *`;
-  
-  const result = await pool.query(updateQuery, [status, id]);
-  
-  if (result.rows.length === 0) {
+  if (!order) {
     throw new AppError('Order not found', 404);
   }
   
+  order.status = status;
+  if (status === 'delivered') {
+    order.delivered_at = new Date();
+  }
+  
+  const updated = await orderRepo.save(order);
+  
   res.status(200).json({
     success: true,
-    data: result.rows[0]
+    data: updated
   });
 });
 
@@ -242,24 +271,24 @@ const updateOrder = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { customer_id, notes, status } = req.body;
   
-  const result = await pool.query(
-    `UPDATE orders 
-     SET customer_id = COALESCE($1, customer_id),
-         notes = COALESCE($2, notes),
-         status = COALESCE($3, status),
-         updated_at = CURRENT_TIMESTAMP
-     WHERE id = $4
-     RETURNING *`,
-    [customer_id, notes, status, id]
-  );
+  const dataSource = await getDataSource();
+  const orderRepo = dataSource.getRepository(Order);
   
-  if (result.rows.length === 0) {
+  const order = await orderRepo.findOne({ where: { id } });
+  
+  if (!order) {
     throw new AppError('Order not found', 404);
   }
   
+  if (customer_id !== undefined) order.customer_id = customer_id;
+  if (notes !== undefined) order.notes = notes;
+  if (status !== undefined) order.status = status;
+  
+  const updated = await orderRepo.save(order);
+  
   res.status(200).json({
     success: true,
-    data: result.rows[0]
+    data: updated
   });
 });
 
@@ -267,10 +296,12 @@ const updateOrder = asyncHandler(async (req, res) => {
 // @route   DELETE /api/orders/:id
 const deleteOrder = asyncHandler(async (req, res) => {
   const { id } = req.params;
+  const dataSource = await getDataSource();
+  const orderRepo = dataSource.getRepository(Order);
   
-  const result = await pool.query('DELETE FROM orders WHERE id = $1 RETURNING *', [id]);
+  const result = await orderRepo.delete({ id });
   
-  if (result.rows.length === 0) {
+  if (result.affected === 0) {
     throw new AppError('Order not found', 404);
   }
   
@@ -290,25 +321,27 @@ const getOrderStats = asyncHandler(async (req, res) => {
   }
   
   const targetDate = date || new Date().toISOString().split('T')[0];
+  const dataSource = await getDataSource();
+  const orderRepo = dataSource.getRepository(Order);
   
-  const stats = await pool.query(`
-    SELECT 
-      COUNT(*) FILTER (WHERE status = 'received') as preps_received,
-      COUNT(*) FILTER (WHERE status = 'delivered') as preps_delivered,
-      COALESCE(SUM(total_price) FILTER (WHERE status = 'delivered'), 0) as total_earnings
-    FROM orders
-    WHERE location_id = $1 
-    AND DATE(order_date) = $2
-  `, [location_id, targetDate]);
+  const orders = await orderRepo
+    .createQueryBuilder('order')
+    .where('order.location_id = :locationId', { locationId: location_id })
+    .andWhere('DATE(order.order_date) = :date', { date: targetDate })
+    .getMany();
+  
+  const stats = {
+    preps_received: orders.filter(o => o.status === 'received').length,
+    preps_delivered: orders.filter(o => o.status === 'delivered').length,
+    total_earnings: orders
+      .filter(o => o.status === 'delivered')
+      .reduce((sum, o) => sum + parseFloat(o.total_price || 0), 0),
+    date: targetDate
+  };
   
   res.status(200).json({
     success: true,
-    data: {
-      preps_received: parseInt(stats.rows[0].preps_received) || 0,
-      preps_delivered: parseInt(stats.rows[0].preps_delivered) || 0,
-      total_earnings: parseFloat(stats.rows[0].total_earnings) || 0,
-      date: targetDate
-    }
+    data: stats
   });
 });
 
@@ -321,4 +354,3 @@ module.exports = {
   deleteOrder,
   getOrderStats
 };
-
