@@ -1,46 +1,49 @@
 /**
- * Settings Controller
+ * Settings Controller - TypeORM Version
  * Handles Food Categories, Food Types, Specifications, Cook Types
  */
 
-const pool = require('../database/dbconn');
+const { getDataSource } = require('../database/typeorm');
+const { FoodCategory } = require('../entities/FoodCategory.entity');
+const { FoodType } = require('../entities/FoodType.entity');
+const { Specification } = require('../entities/Specification.entity');
+const { CookType } = require('../entities/CookType.entity');
 const { AppError, asyncHandler } = require('../middleware/errorHandler');
 
 // ==================== FOOD CATEGORIES ====================
 
-// @desc    Get all food categories
-// @route   GET /api/settings/categories
 const getCategories = asyncHandler(async (req, res) => {
-  const result = await pool.query(
-    'SELECT * FROM food_categories ORDER BY display_order, name'
-  );
+  const dataSource = await getDataSource();
+  const categoryRepo = dataSource.getRepository(FoodCategory);
+  
+  const categories = await categoryRepo.find({
+    order: { display_order: 'ASC', name: 'ASC' }
+  });
   
   res.status(200).json({
     success: true,
-    count: result.rows.length,
-    data: result.rows
+    count: categories.length,
+    data: categories
   });
 });
 
-// @desc    Get single category
-// @route   GET /api/settings/categories/:id
 const getCategory = asyncHandler(async (req, res) => {
   const { id } = req.params;
+  const dataSource = await getDataSource();
+  const categoryRepo = dataSource.getRepository(FoodCategory);
   
-  const result = await pool.query('SELECT * FROM food_categories WHERE id = $1', [id]);
+  const category = await categoryRepo.findOne({ where: { id } });
   
-  if (result.rows.length === 0) {
+  if (!category) {
     throw new AppError('Category not found', 404);
   }
   
   res.status(200).json({
     success: true,
-    data: result.rows[0]
+    data: category
   });
 });
 
-// @desc    Create food category
-// @route   POST /api/settings/categories
 const createCategory = asyncHandler(async (req, res) => {
   const { name, display_order, show_specification = true, show_cook_type = true } = req.body;
   
@@ -48,62 +51,68 @@ const createCategory = asyncHandler(async (req, res) => {
     throw new AppError('Category name is required', 400);
   }
   
+  const dataSource = await getDataSource();
+  const categoryRepo = dataSource.getRepository(FoodCategory);
+  
   // Get max display order if not provided
   let order = display_order;
   if (!order) {
-    const maxOrder = await pool.query('SELECT COALESCE(MAX(display_order), 0) + 1 as next_order FROM food_categories');
-    order = maxOrder.rows[0].next_order;
+    const maxResult = await categoryRepo
+      .createQueryBuilder('category')
+      .select('MAX(category.display_order)', 'max')
+      .getRawOne();
+    order = (maxResult?.max || 0) + 1;
   }
   
-  const result = await pool.query(
-    `INSERT INTO food_categories (name, display_order, show_specification, show_cook_type)
-     VALUES ($1, $2, $3, $4)
-     RETURNING *`,
-    [name, order, show_specification, show_cook_type]
-  );
+  const category = categoryRepo.create({
+    name,
+    display_order: order,
+    show_specification,
+    show_cook_type
+  });
+  
+  const saved = await categoryRepo.save(category);
   
   res.status(201).json({
     success: true,
-    data: result.rows[0]
+    data: saved
   });
 });
 
-// @desc    Update food category
-// @route   PUT /api/settings/categories/:id
 const updateCategory = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { name, display_order, show_specification, show_cook_type } = req.body;
   
-  const result = await pool.query(
-    `UPDATE food_categories 
-     SET name = COALESCE($1, name),
-         display_order = COALESCE($2, display_order),
-         show_specification = COALESCE($3, show_specification),
-         show_cook_type = COALESCE($4, show_cook_type),
-         updated_at = CURRENT_TIMESTAMP
-     WHERE id = $5
-     RETURNING *`,
-    [name, display_order, show_specification, show_cook_type, id]
-  );
+  const dataSource = await getDataSource();
+  const categoryRepo = dataSource.getRepository(FoodCategory);
   
-  if (result.rows.length === 0) {
+  const category = await categoryRepo.findOne({ where: { id } });
+  
+  if (!category) {
     throw new AppError('Category not found', 404);
   }
   
+  if (name !== undefined) category.name = name;
+  if (display_order !== undefined) category.display_order = display_order;
+  if (show_specification !== undefined) category.show_specification = show_specification;
+  if (show_cook_type !== undefined) category.show_cook_type = show_cook_type;
+  
+  const updated = await categoryRepo.save(category);
+  
   res.status(200).json({
     success: true,
-    data: result.rows[0]
+    data: updated
   });
 });
 
-// @desc    Delete food category
-// @route   DELETE /api/settings/categories/:id
 const deleteCategory = asyncHandler(async (req, res) => {
   const { id } = req.params;
+  const dataSource = await getDataSource();
+  const categoryRepo = dataSource.getRepository(FoodCategory);
   
-  const result = await pool.query('DELETE FROM food_categories WHERE id = $1 RETURNING *', [id]);
+  const result = await categoryRepo.delete({ id });
   
-  if (result.rows.length === 0) {
+  if (result.affected === 0) {
     throw new AppError('Category not found', 404);
   }
   
@@ -115,59 +124,59 @@ const deleteCategory = asyncHandler(async (req, res) => {
 
 // ==================== FOOD TYPES ====================
 
-// @desc    Get all food types (optionally filtered by category)
-// @route   GET /api/settings/types
 const getTypes = asyncHandler(async (req, res) => {
   const { category_id } = req.query;
+  const dataSource = await getDataSource();
+  const typeRepo = dataSource.getRepository(FoodType);
   
-  let query = `
-    SELECT ft.*, fc.name as category_name 
-    FROM food_types ft
-    JOIN food_categories fc ON ft.category_id = fc.id
-  `;
-  const params = [];
+  const queryBuilder = typeRepo
+    .createQueryBuilder('type')
+    .leftJoinAndSelect('type.category', 'category')
+    .orderBy('category.display_order', 'ASC')
+    .addOrderBy('type.name', 'ASC');
   
   if (category_id) {
-    params.push(category_id);
-    query += ` WHERE ft.category_id = $${params.length}`;
+    queryBuilder.where('type.category_id = :categoryId', { categoryId: category_id });
   }
   
-  query += ' ORDER BY fc.display_order, ft.name';
+  const types = await queryBuilder.getMany();
   
-  const result = await pool.query(query, params);
+  // Format response to include category_name
+  const formattedTypes = types.map(type => ({
+    ...type,
+    category_name: type.category?.name
+  }));
   
   res.status(200).json({
     success: true,
-    count: result.rows.length,
-    data: result.rows
+    count: formattedTypes.length,
+    data: formattedTypes
   });
 });
 
-// @desc    Get single food type
-// @route   GET /api/settings/types/:id
 const getType = asyncHandler(async (req, res) => {
   const { id } = req.params;
+  const dataSource = await getDataSource();
+  const typeRepo = dataSource.getRepository(FoodType);
   
-  const result = await pool.query(
-    `SELECT ft.*, fc.name as category_name 
-     FROM food_types ft
-     JOIN food_categories fc ON ft.category_id = fc.id
-     WHERE ft.id = $1`,
-    [id]
-  );
+  const type = await typeRepo.findOne({
+    where: { id },
+    relations: ['category']
+  });
   
-  if (result.rows.length === 0) {
+  if (!type) {
     throw new AppError('Food type not found', 404);
   }
   
   res.status(200).json({
     success: true,
-    data: result.rows[0]
+    data: {
+      ...type,
+      category_name: type.category?.name
+    }
   });
 });
 
-// @desc    Create food type
-// @route   POST /api/settings/types
 const createType = asyncHandler(async (req, res) => {
   const { category_id, name } = req.body;
   
@@ -175,59 +184,61 @@ const createType = asyncHandler(async (req, res) => {
     throw new AppError('Category ID and name are required', 400);
   }
   
+  const dataSource = await getDataSource();
+  const typeRepo = dataSource.getRepository(FoodType);
+  const categoryRepo = dataSource.getRepository(FoodCategory);
+  
   // Verify category exists
-  const categoryCheck = await pool.query('SELECT id FROM food_categories WHERE id = $1', [category_id]);
-  if (categoryCheck.rows.length === 0) {
+  const category = await categoryRepo.findOne({ where: { id: category_id } });
+  if (!category) {
     throw new AppError('Category not found', 404);
   }
   
-  const result = await pool.query(
-    `INSERT INTO food_types (category_id, name)
-     VALUES ($1, $2)
-     RETURNING *`,
-    [category_id, name]
-  );
+  const foodType = typeRepo.create({
+    category_id,
+    name
+  });
+  
+  const saved = await typeRepo.save(foodType);
   
   res.status(201).json({
     success: true,
-    data: result.rows[0]
+    data: saved
   });
 });
 
-// @desc    Update food type
-// @route   PUT /api/settings/types/:id
 const updateType = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { category_id, name } = req.body;
   
-  const result = await pool.query(
-    `UPDATE food_types 
-     SET category_id = COALESCE($1, category_id),
-         name = COALESCE($2, name),
-         updated_at = CURRENT_TIMESTAMP
-     WHERE id = $3
-     RETURNING *`,
-    [category_id, name, id]
-  );
+  const dataSource = await getDataSource();
+  const typeRepo = dataSource.getRepository(FoodType);
   
-  if (result.rows.length === 0) {
+  const foodType = await typeRepo.findOne({ where: { id } });
+  
+  if (!foodType) {
     throw new AppError('Food type not found', 404);
   }
   
+  if (category_id !== undefined) foodType.category_id = category_id;
+  if (name !== undefined) foodType.name = name;
+  
+  const updated = await typeRepo.save(foodType);
+  
   res.status(200).json({
     success: true,
-    data: result.rows[0]
+    data: updated
   });
 });
 
-// @desc    Delete food type
-// @route   DELETE /api/settings/types/:id
 const deleteType = asyncHandler(async (req, res) => {
   const { id } = req.params;
+  const dataSource = await getDataSource();
+  const typeRepo = dataSource.getRepository(FoodType);
   
-  const result = await pool.query('DELETE FROM food_types WHERE id = $1 RETURNING *', [id]);
+  const result = await typeRepo.delete({ id });
   
-  if (result.rows.length === 0) {
+  if (result.affected === 0) {
     throw new AppError('Food type not found', 404);
   }
   
@@ -239,37 +250,38 @@ const deleteType = asyncHandler(async (req, res) => {
 
 // ==================== SPECIFICATIONS ====================
 
-// @desc    Get specifications (optionally filtered by food type)
-// @route   GET /api/settings/specifications
 const getSpecifications = asyncHandler(async (req, res) => {
   const { food_type_id } = req.query;
+  const dataSource = await getDataSource();
+  const specRepo = dataSource.getRepository(Specification);
   
-  let query = `
-    SELECT s.*, ft.name as food_type_name, fc.name as category_name
-    FROM specifications s
-    JOIN food_types ft ON s.food_type_id = ft.id
-    JOIN food_categories fc ON ft.category_id = fc.id
-  `;
-  const params = [];
+  const queryBuilder = specRepo
+    .createQueryBuilder('spec')
+    .leftJoinAndSelect('spec.foodType', 'foodType')
+    .leftJoinAndSelect('foodType.category', 'category')
+    .orderBy('foodType.name', 'ASC')
+    .addOrderBy('spec.name', 'ASC');
   
   if (food_type_id) {
-    params.push(food_type_id);
-    query += ` WHERE s.food_type_id = $${params.length}`;
+    queryBuilder.where('spec.food_type_id = :foodTypeId', { foodTypeId: food_type_id });
   }
   
-  query += ' ORDER BY ft.name, s.name';
+  const specifications = await queryBuilder.getMany();
   
-  const result = await pool.query(query, params);
+  // Format response
+  const formatted = specifications.map(spec => ({
+    ...spec,
+    food_type_name: spec.foodType?.name,
+    category_name: spec.foodType?.category?.name
+  }));
   
   res.status(200).json({
     success: true,
-    count: result.rows.length,
-    data: result.rows
+    count: formatted.length,
+    data: formatted
   });
 });
 
-// @desc    Create specification
-// @route   POST /api/settings/specifications
 const createSpecification = asyncHandler(async (req, res) => {
   const { food_type_id, name } = req.body;
   
@@ -277,52 +289,54 @@ const createSpecification = asyncHandler(async (req, res) => {
     throw new AppError('Food type ID and name are required', 400);
   }
   
-  const result = await pool.query(
-    `INSERT INTO specifications (food_type_id, name)
-     VALUES ($1, $2)
-     RETURNING *`,
-    [food_type_id, name]
-  );
+  const dataSource = await getDataSource();
+  const specRepo = dataSource.getRepository(Specification);
+  
+  const specification = specRepo.create({
+    food_type_id,
+    name
+  });
+  
+  const saved = await specRepo.save(specification);
   
   res.status(201).json({
     success: true,
-    data: result.rows[0]
+    data: saved
   });
 });
 
-// @desc    Update specification
-// @route   PUT /api/settings/specifications/:id
 const updateSpecification = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { food_type_id, name } = req.body;
   
-  const result = await pool.query(
-    `UPDATE specifications 
-     SET food_type_id = COALESCE($1, food_type_id),
-         name = COALESCE($2, name)
-     WHERE id = $3
-     RETURNING *`,
-    [food_type_id, name, id]
-  );
+  const dataSource = await getDataSource();
+  const specRepo = dataSource.getRepository(Specification);
   
-  if (result.rows.length === 0) {
+  const specification = await specRepo.findOne({ where: { id } });
+  
+  if (!specification) {
     throw new AppError('Specification not found', 404);
   }
   
+  if (food_type_id !== undefined) specification.food_type_id = food_type_id;
+  if (name !== undefined) specification.name = name;
+  
+  const updated = await specRepo.save(specification);
+  
   res.status(200).json({
     success: true,
-    data: result.rows[0]
+    data: updated
   });
 });
 
-// @desc    Delete specification
-// @route   DELETE /api/settings/specifications/:id
 const deleteSpecification = asyncHandler(async (req, res) => {
   const { id } = req.params;
+  const dataSource = await getDataSource();
+  const specRepo = dataSource.getRepository(Specification);
   
-  const result = await pool.query('DELETE FROM specifications WHERE id = $1 RETURNING *', [id]);
+  const result = await specRepo.delete({ id });
   
-  if (result.rows.length === 0) {
+  if (result.affected === 0) {
     throw new AppError('Specification not found', 404);
   }
   
@@ -334,36 +348,36 @@ const deleteSpecification = asyncHandler(async (req, res) => {
 
 // ==================== COOK TYPES ====================
 
-// @desc    Get cook types (optionally filtered by category)
-// @route   GET /api/settings/cook-types
 const getCookTypes = asyncHandler(async (req, res) => {
   const { category_id } = req.query;
+  const dataSource = await getDataSource();
+  const cookTypeRepo = dataSource.getRepository(CookType);
   
-  let query = `
-    SELECT ct.*, fc.name as category_name
-    FROM cook_types ct
-    JOIN food_categories fc ON ct.category_id = fc.id
-  `;
-  const params = [];
+  const queryBuilder = cookTypeRepo
+    .createQueryBuilder('cookType')
+    .leftJoinAndSelect('cookType.category', 'category')
+    .orderBy('category.display_order', 'ASC')
+    .addOrderBy('cookType.name', 'ASC');
   
   if (category_id) {
-    params.push(category_id);
-    query += ` WHERE ct.category_id = $${params.length}`;
+    queryBuilder.where('cookType.category_id = :categoryId', { categoryId: category_id });
   }
   
-  query += ' ORDER BY fc.display_order, ct.name';
+  const cookTypes = await queryBuilder.getMany();
   
-  const result = await pool.query(query, params);
+  // Format response
+  const formatted = cookTypes.map(ct => ({
+    ...ct,
+    category_name: ct.category?.name
+  }));
   
   res.status(200).json({
     success: true,
-    count: result.rows.length,
-    data: result.rows
+    count: formatted.length,
+    data: formatted
   });
 });
 
-// @desc    Create cook type
-// @route   POST /api/settings/cook-types
 const createCookType = asyncHandler(async (req, res) => {
   const { category_id, name } = req.body;
   
@@ -371,52 +385,54 @@ const createCookType = asyncHandler(async (req, res) => {
     throw new AppError('Category ID and name are required', 400);
   }
   
-  const result = await pool.query(
-    `INSERT INTO cook_types (category_id, name)
-     VALUES ($1, $2)
-     RETURNING *`,
-    [category_id, name]
-  );
+  const dataSource = await getDataSource();
+  const cookTypeRepo = dataSource.getRepository(CookType);
+  
+  const cookType = cookTypeRepo.create({
+    category_id,
+    name
+  });
+  
+  const saved = await cookTypeRepo.save(cookType);
   
   res.status(201).json({
     success: true,
-    data: result.rows[0]
+    data: saved
   });
 });
 
-// @desc    Update cook type
-// @route   PUT /api/settings/cook-types/:id
 const updateCookType = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { category_id, name } = req.body;
   
-  const result = await pool.query(
-    `UPDATE cook_types 
-     SET category_id = COALESCE($1, category_id),
-         name = COALESCE($2, name)
-     WHERE id = $3
-     RETURNING *`,
-    [category_id, name, id]
-  );
+  const dataSource = await getDataSource();
+  const cookTypeRepo = dataSource.getRepository(CookType);
   
-  if (result.rows.length === 0) {
+  const cookType = await cookTypeRepo.findOne({ where: { id } });
+  
+  if (!cookType) {
     throw new AppError('Cook type not found', 404);
   }
   
+  if (category_id !== undefined) cookType.category_id = category_id;
+  if (name !== undefined) cookType.name = name;
+  
+  const updated = await cookTypeRepo.save(cookType);
+  
   res.status(200).json({
     success: true,
-    data: result.rows[0]
+    data: updated
   });
 });
 
-// @desc    Delete cook type
-// @route   DELETE /api/settings/cook-types/:id
 const deleteCookType = asyncHandler(async (req, res) => {
   const { id } = req.params;
+  const dataSource = await getDataSource();
+  const cookTypeRepo = dataSource.getRepository(CookType);
   
-  const result = await pool.query('DELETE FROM cook_types WHERE id = $1 RETURNING *', [id]);
+  const result = await cookTypeRepo.delete({ id });
   
-  if (result.rows.length === 0) {
+  if (result.affected === 0) {
     throw new AppError('Cook type not found', 404);
   }
   
@@ -450,4 +466,3 @@ module.exports = {
   updateCookType,
   deleteCookType
 };
-
