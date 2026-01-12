@@ -1,75 +1,64 @@
 /**
- * Ingredients Controller
+ * Ingredients Controller - TypeORM Version
  * Handles ingredient management with quantities, specs, and cook types
  */
 
-const pool = require('../database/dbconn');
+const { getDataSource } = require('../database/typeorm');
+const { Ingredient } = require('../entities/Ingredient.entity');
+const { IngredientQuantity } = require('../entities/IngredientQuantity.entity');
+const { FoodType } = require('../entities/FoodType.entity');
+const { FoodCategory } = require('../entities/FoodCategory.entity');
+const { Specification } = require('../entities/Specification.entity');
+const { CookType } = require('../entities/CookType.entity');
 const { AppError, asyncHandler } = require('../middleware/errorHandler');
 
 // @desc    Get all ingredients (with optional filters)
 // @route   GET /api/ingredients
 const getIngredients = asyncHandler(async (req, res) => {
   const { category_id, food_type_id, is_active } = req.query;
+  const dataSource = await getDataSource();
+  const ingredientRepo = dataSource.getRepository(Ingredient);
   
-  let query = `
-    SELECT 
-      i.*,
-      ft.name as food_type_name,
-      fc.id as category_id,
-      fc.name as category_name,
-      s.name as specification_name,
-      ct.name as cook_type_name,
-      COALESCE(
-        json_agg(
-          json_build_object(
-            'id', iq.id,
-            'quantity_value', iq.quantity_value,
-            'quantity_grams', iq.quantity_grams,
-            'price', iq.price,
-            'is_available', iq.is_available
-          )
-        ) FILTER (WHERE iq.id IS NOT NULL),
-        '[]'
-      ) as quantities
-    FROM ingredients i
-    JOIN food_types ft ON i.food_type_id = ft.id
-    JOIN food_categories fc ON ft.category_id = fc.id
-    LEFT JOIN specifications s ON i.specification_id = s.id
-    LEFT JOIN cook_types ct ON i.cook_type_id = ct.id
-    LEFT JOIN ingredient_quantities iq ON i.id = iq.ingredient_id
-  `;
-  
-  const params = [];
-  const conditions = [];
+  const queryBuilder = ingredientRepo
+    .createQueryBuilder('ingredient')
+    .leftJoinAndSelect('ingredient.foodType', 'foodType')
+    .leftJoinAndSelect('foodType.category', 'category')
+    .leftJoinAndSelect('ingredient.specification', 'specification')
+    .leftJoinAndSelect('ingredient.cookType', 'cookType')
+    .leftJoinAndSelect('ingredient.quantities', 'quantities')
+    .orderBy('category.display_order', 'ASC')
+    .addOrderBy('foodType.name', 'ASC')
+    .addOrderBy('ingredient.created_at', 'DESC');
   
   if (category_id) {
-    params.push(category_id);
-    conditions.push(`fc.id = $${params.length}`);
+    queryBuilder.where('category.id = :categoryId', { categoryId: category_id });
   }
   
   if (food_type_id) {
-    params.push(food_type_id);
-    conditions.push(`i.food_type_id = $${params.length}`);
+    queryBuilder.andWhere('ingredient.food_type_id = :foodTypeId', { foodTypeId: food_type_id });
   }
   
   if (is_active !== undefined) {
-    params.push(is_active === 'true');
-    conditions.push(`i.is_active = $${params.length}`);
+    queryBuilder.andWhere('ingredient.is_active = :isActive', { isActive: is_active === 'true' });
   }
   
-  if (conditions.length > 0) {
-    query += ' WHERE ' + conditions.join(' AND ');
-  }
+  const ingredients = await queryBuilder.getMany();
   
-  query += ` GROUP BY i.id, ft.name, fc.id, fc.name, s.name, ct.name
-             ORDER BY fc.display_order, ft.name, i.created_at DESC`;
-  
-  const result = await pool.query(query, params);
+  // Format response
+  const formatted = ingredients.map(ing => ({
+    ...ing,
+    food_type_name: ing.foodType?.name,
+    category_id: ing.foodType?.category?.id,
+    category_name: ing.foodType?.category?.name,
+    specification_name: ing.specification?.name,
+    cook_type_name: ing.cookType?.name,
+    quantities: ing.quantities || []
+  }));
   
   res.status(200).json({
     success: true,
-    count: result.rows.length,
-    data: result.rows
+    count: formatted.length,
+    data: formatted
   });
 });
 
@@ -77,39 +66,32 @@ const getIngredients = asyncHandler(async (req, res) => {
 // @route   GET /api/ingredients/:id
 const getIngredient = asyncHandler(async (req, res) => {
   const { id } = req.params;
+  const dataSource = await getDataSource();
+  const ingredientRepo = dataSource.getRepository(Ingredient);
   
-  const result = await pool.query(`
-    SELECT 
-      i.*,
-      ft.name as food_type_name,
-      fc.id as category_id,
-      fc.name as category_name,
-      s.name as specification_name,
-      ct.name as cook_type_name
-    FROM ingredients i
-    JOIN food_types ft ON i.food_type_id = ft.id
-    JOIN food_categories fc ON ft.category_id = fc.id
-    LEFT JOIN specifications s ON i.specification_id = s.id
-    LEFT JOIN cook_types ct ON i.cook_type_id = ct.id
-    WHERE i.id = $1
-  `, [id]);
+  const ingredient = await ingredientRepo.findOne({
+    where: { id },
+    relations: ['foodType', 'foodType.category', 'specification', 'cookType', 'quantities']
+  });
   
-  if (result.rows.length === 0) {
+  if (!ingredient) {
     throw new AppError('Ingredient not found', 404);
   }
   
-  // Get quantities
-  const quantities = await pool.query(
-    'SELECT * FROM ingredient_quantities WHERE ingredient_id = $1 ORDER BY quantity_grams',
-    [id]
-  );
+  // Format response
+  const formatted = {
+    ...ingredient,
+    food_type_name: ingredient.foodType?.name,
+    category_id: ingredient.foodType?.category?.id,
+    category_name: ingredient.foodType?.category?.name,
+    specification_name: ingredient.specification?.name,
+    cook_type_name: ingredient.cookType?.name,
+    quantities: ingredient.quantities || []
+  };
   
   res.status(200).json({
     success: true,
-    data: {
-      ...result.rows[0],
-      quantities: quantities.rows
-    }
+    data: formatted
   });
 });
 
@@ -122,55 +104,58 @@ const createIngredient = asyncHandler(async (req, res) => {
     cook_type_id, 
     name,
     description,
-    quantities = [] // Array of { quantity_value, quantity_grams, price }
+    quantities = []
   } = req.body;
   
   if (!food_type_id) {
     throw new AppError('Food type ID is required', 400);
   }
   
-  const client = await pool.connect();
+  const dataSource = await getDataSource();
   
-  try {
-    await client.query('BEGIN');
+  await dataSource.transaction(async (manager) => {
+    const ingredientRepo = manager.getRepository(Ingredient);
+    const quantityRepo = manager.getRepository(IngredientQuantity);
     
     // Create ingredient
-    const ingredientResult = await client.query(
-      `INSERT INTO ingredients (food_type_id, specification_id, cook_type_id, name, description)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING *`,
-      [food_type_id, specification_id || null, cook_type_id || null, name, description]
-    );
+    const ingredient = ingredientRepo.create({
+      food_type_id,
+      specification_id: specification_id || null,
+      cook_type_id: cook_type_id || null,
+      name,
+      description
+    });
     
-    const ingredient = ingredientResult.rows[0];
+    const savedIngredient = await ingredientRepo.save(ingredient);
     
     // Create quantities
     const createdQuantities = [];
     for (const qty of quantities) {
-      const qtyResult = await client.query(
-        `INSERT INTO ingredient_quantities (ingredient_id, quantity_value, quantity_grams, price, is_available)
-         VALUES ($1, $2, $3, $4, $5)
-         RETURNING *`,
-        [ingredient.id, qty.quantity_value, qty.quantity_grams || null, qty.price || 0, qty.is_available !== false]
-      );
-      createdQuantities.push(qtyResult.rows[0]);
+      const quantity = quantityRepo.create({
+        ingredient_id: savedIngredient.id,
+        quantity_value: qty.quantity_value,
+        quantity_grams: qty.quantity_grams || null,
+        price: qty.price || 0,
+        is_available: qty.is_available !== false
+      });
+      const saved = await quantityRepo.save(quantity);
+      createdQuantities.push(saved);
     }
     
-    await client.query('COMMIT');
+    // Fetch full ingredient with relations
+    const fullIngredient = await ingredientRepo.findOne({
+      where: { id: savedIngredient.id },
+      relations: ['foodType', 'foodType.category', 'specification', 'cookType']
+    });
     
     res.status(201).json({
       success: true,
       data: {
-        ...ingredient,
+        ...fullIngredient,
         quantities: createdQuantities
       }
     });
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 });
 
 // @desc    Update ingredient
@@ -184,83 +169,83 @@ const updateIngredient = asyncHandler(async (req, res) => {
     name,
     description,
     is_active,
-    quantities // Array of quantities to update/create
+    quantities
   } = req.body;
   
-  const client = await pool.connect();
+  const dataSource = await getDataSource();
   
-  try {
-    await client.query('BEGIN');
+  await dataSource.transaction(async (manager) => {
+    const ingredientRepo = manager.getRepository(Ingredient);
+    const quantityRepo = manager.getRepository(IngredientQuantity);
     
-    // Update ingredient
-    const result = await client.query(
-      `UPDATE ingredients 
-       SET food_type_id = COALESCE($1, food_type_id),
-           specification_id = $2,
-           cook_type_id = $3,
-           name = COALESCE($4, name),
-           description = COALESCE($5, description),
-           is_active = COALESCE($6, is_active),
-           updated_at = CURRENT_TIMESTAMP
-       WHERE id = $7
-       RETURNING *`,
-      [food_type_id, specification_id, cook_type_id, name, description, is_active, id]
-    );
+    const ingredient = await ingredientRepo.findOne({ where: { id } });
     
-    if (result.rows.length === 0) {
+    if (!ingredient) {
       throw new AppError('Ingredient not found', 404);
     }
+    
+    // Update ingredient fields
+    if (food_type_id !== undefined) ingredient.food_type_id = food_type_id;
+    if (specification_id !== undefined) ingredient.specification_id = specification_id;
+    if (cook_type_id !== undefined) ingredient.cook_type_id = cook_type_id;
+    if (name !== undefined) ingredient.name = name;
+    if (description !== undefined) ingredient.description = description;
+    if (is_active !== undefined) ingredient.is_active = is_active;
+    
+    await ingredientRepo.save(ingredient);
     
     // Update quantities if provided
     let updatedQuantities = [];
     if (quantities && Array.isArray(quantities)) {
       // Delete existing quantities
-      await client.query('DELETE FROM ingredient_quantities WHERE ingredient_id = $1', [id]);
+      await quantityRepo.delete({ ingredient_id: id });
       
       // Insert new quantities
       for (const qty of quantities) {
-        const qtyResult = await client.query(
-          `INSERT INTO ingredient_quantities (ingredient_id, quantity_value, quantity_grams, price, is_available)
-           VALUES ($1, $2, $3, $4, $5)
-           RETURNING *`,
-          [id, qty.quantity_value, qty.quantity_grams || null, qty.price || 0, qty.is_available !== false]
-        );
-        updatedQuantities.push(qtyResult.rows[0]);
+        const quantity = quantityRepo.create({
+          ingredient_id: id,
+          quantity_value: qty.quantity_value,
+          quantity_grams: qty.quantity_grams || null,
+          price: qty.price || 0,
+          is_available: qty.is_available !== false
+        });
+        const saved = await quantityRepo.save(quantity);
+        updatedQuantities.push(saved);
       }
     } else {
       // Get existing quantities
-      const existingQty = await client.query(
-        'SELECT * FROM ingredient_quantities WHERE ingredient_id = $1',
-        [id]
-      );
-      updatedQuantities = existingQty.rows;
+      updatedQuantities = await quantityRepo.find({
+        where: { ingredient_id: id },
+        order: { quantity_grams: 'ASC' }
+      });
     }
     
-    await client.query('COMMIT');
+    // Fetch full ingredient with relations
+    const fullIngredient = await ingredientRepo.findOne({
+      where: { id },
+      relations: ['foodType', 'foodType.category', 'specification', 'cookType']
+    });
     
     res.status(200).json({
       success: true,
       data: {
-        ...result.rows[0],
+        ...fullIngredient,
         quantities: updatedQuantities
       }
     });
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 });
 
 // @desc    Delete ingredient
 // @route   DELETE /api/ingredients/:id
 const deleteIngredient = asyncHandler(async (req, res) => {
   const { id } = req.params;
+  const dataSource = await getDataSource();
+  const ingredientRepo = dataSource.getRepository(Ingredient);
   
-  const result = await pool.query('DELETE FROM ingredients WHERE id = $1 RETURNING *', [id]);
+  const result = await ingredientRepo.delete({ id });
   
-  if (result.rows.length === 0) {
+  if (result.affected === 0) {
     throw new AppError('Ingredient not found', 404);
   }
   
@@ -273,39 +258,48 @@ const deleteIngredient = asyncHandler(async (req, res) => {
 // @desc    Get ingredients grouped by category (for tabs)
 // @route   GET /api/ingredients/by-category
 const getIngredientsByCategory = asyncHandler(async (req, res) => {
-  const result = await pool.query(`
-    SELECT 
-      fc.id as category_id,
-      fc.name as category_name,
-      fc.display_order,
-      fc.show_specification,
-      fc.show_cook_type,
-      COALESCE(
-        json_agg(
-          json_build_object(
-            'id', i.id,
-            'name', i.name,
-            'food_type_id', ft.id,
-            'food_type_name', ft.name,
-            'specification_name', s.name,
-            'cook_type_name', ct.name,
-            'is_active', i.is_active
-          ) ORDER BY ft.name, i.created_at DESC
-        ) FILTER (WHERE i.id IS NOT NULL),
-        '[]'
-      ) as ingredients
-    FROM food_categories fc
-    LEFT JOIN food_types ft ON fc.id = ft.category_id
-    LEFT JOIN ingredients i ON ft.id = i.food_type_id
-    LEFT JOIN specifications s ON i.specification_id = s.id
-    LEFT JOIN cook_types ct ON i.cook_type_id = ct.id
-    GROUP BY fc.id, fc.name, fc.display_order, fc.show_specification, fc.show_cook_type
-    ORDER BY fc.display_order
-  `);
+  const dataSource = await getDataSource();
+  const categoryRepo = dataSource.getRepository(FoodCategory);
+  const ingredientRepo = dataSource.getRepository(Ingredient);
+  
+  // Get all categories
+  const categories = await categoryRepo.find({
+    order: { display_order: 'ASC' }
+  });
+  
+  // Get all ingredients with relations
+  const ingredients = await ingredientRepo.find({
+    relations: ['foodType', 'foodType.category', 'specification', 'cookType'],
+    order: { created_at: 'DESC' }
+  });
+  
+  // Group ingredients by category
+  const grouped = categories.map(category => {
+    const categoryIngredients = ingredients
+      .filter(ing => ing.foodType?.category?.id === category.id)
+      .map(ing => ({
+        id: ing.id,
+        name: ing.name,
+        food_type_id: ing.foodType?.id,
+        food_type_name: ing.foodType?.name,
+        specification_name: ing.specification?.name,
+        cook_type_name: ing.cookType?.name,
+        is_active: ing.is_active
+      }));
+    
+    return {
+      category_id: category.id,
+      category_name: category.name,
+      display_order: category.display_order,
+      show_specification: category.show_specification,
+      show_cook_type: category.show_cook_type,
+      ingredients: categoryIngredients
+    };
+  });
   
   res.status(200).json({
     success: true,
-    data: result.rows
+    data: grouped
   });
 });
 
@@ -317,4 +311,3 @@ module.exports = {
   deleteIngredient,
   getIngredientsByCategory
 };
-
