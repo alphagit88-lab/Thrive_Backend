@@ -36,14 +36,14 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Database connection test
+// Database connection test (Raw SQL)
 const pool = require('./database/dbconn');
 app.get('/api/test/db', async (req, res) => {
   try {
     const result = await pool.query('SELECT NOW()');
     res.json({ 
       success: true,
-      status: 'Connected to database successfully',
+      status: 'Connected to database successfully (Raw SQL)',
       time: result.rows[0].now 
     });
   } catch (error) {
@@ -54,6 +54,9 @@ app.get('/api/test/db', async (req, res) => {
     });
   }
 });
+
+// TypeORM test routes
+app.use('/api/test/typeorm', require('./routes/test-typeorm.routes'));
 
 // 404 handler
 app.use((req, res, next) => {
