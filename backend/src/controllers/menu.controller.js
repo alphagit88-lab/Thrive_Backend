@@ -72,7 +72,14 @@ const getMenuItems = asyncHandler(async (req, res) => {
         order: { display_order: 'ASC' }
       })
     : [];
-  
+
+  // Get ingredients separately
+  const menuIngredients = menuItemIds.length > 0
+    ? await dataSource.getRepository(MenuItemIngredient).find({
+        where: menuItemIds.map(id => ({ menu_item_id: id }))
+      })
+    : [];
+
   // Group photos by menu_item_id
   const photosByMenuItem = {};
   photos.forEach(photo => {
@@ -85,7 +92,22 @@ const getMenuItems = asyncHandler(async (req, res) => {
       display_order: photo.display_order
     });
   });
-  
+
+  // Group ingredients by menu_item_id
+  const ingredientsByMenuItem = {};
+  menuIngredients.forEach(menuIng => {
+    if (!ingredientsByMenuItem[menuIng.menu_item_id]) {
+      ingredientsByMenuItem[menuIng.menu_item_id] = [];
+    }
+    ingredientsByMenuItem[menuIng.menu_item_id].push({
+      id: menuIng.id,
+      menu_item_id: menuIng.menu_item_id,
+      ingredient_id: menuIng.ingredient_id,
+      ingredient_quantity_id: menuIng.ingredient_quantity_id,
+      custom_quantity: menuIng.custom_quantity
+    });
+  });
+
   // Format response
   const formatted = menuItems.map(item => ({
     ...item,
@@ -94,7 +116,8 @@ const getMenuItems = asyncHandler(async (req, res) => {
     specification_name: item.specification_name,
     cook_type_name: item.cook_type_name,
     location_name: item.location?.name,
-    photos: photosByMenuItem[item.id] || []
+    photos: photosByMenuItem[item.id] || [],
+    ingredients: ingredientsByMenuItem[item.id] || []
   }));
   
   res.status(200).json({
@@ -234,6 +257,11 @@ const createMenuItem = asyncHandler(async (req, res) => {
     
     const savedMenuItem = await menuItemRepo.save(menuItem);
     
+    // Fetch the saved item again to get the display_id set by the database trigger
+    const menuItemWithDisplayId = await menuItemRepo.findOne({
+      where: { id: savedMenuItem.id }
+    });
+    
     // Add photos
     const createdPhotos = [];
     for (let i = 0; i < photos.length; i++) {
@@ -262,7 +290,7 @@ const createMenuItem = asyncHandler(async (req, res) => {
     res.status(201).json({
       success: true,
       data: {
-        ...savedMenuItem,
+        ...menuItemWithDisplayId,
         photos: createdPhotos,
         ingredients: createdIngredients
       }
@@ -304,16 +332,17 @@ const updateMenuItem = asyncHandler(async (req, res) => {
     }
     
     // Update menu item fields
+    // Convert empty strings to null for foreign key fields to avoid validation errors
     if (name !== undefined) menuItem.name = name;
-    if (food_category_id !== undefined) menuItem.food_category_id = food_category_id;
-    if (food_type_id !== undefined) menuItem.food_type_id = food_type_id;
-    if (quantity !== undefined) menuItem.quantity = quantity;
-    if (specification_id !== undefined) menuItem.specification_id = specification_id;
-    if (cook_type_id !== undefined) menuItem.cook_type_id = cook_type_id;
-    if (description !== undefined) menuItem.description = description;
+    if (food_category_id !== undefined) menuItem.food_category_id = food_category_id || null;
+    if (food_type_id !== undefined) menuItem.food_type_id = food_type_id || null;
+    if (quantity !== undefined) menuItem.quantity = quantity || null;
+    if (specification_id !== undefined) menuItem.specification_id = specification_id || null;
+    if (cook_type_id !== undefined) menuItem.cook_type_id = cook_type_id || null;
+    if (description !== undefined) menuItem.description = description || null;
     if (price !== undefined) menuItem.price = price;
-    if (tags !== undefined) menuItem.tags = tags;
-    if (prep_workout !== undefined) menuItem.prep_workout = prep_workout;
+    if (tags !== undefined) menuItem.tags = tags || null;
+    if (prep_workout !== undefined) menuItem.prep_workout = prep_workout || null;
     if (status !== undefined) menuItem.status = status;
     
     await menuItemRepo.save(menuItem);

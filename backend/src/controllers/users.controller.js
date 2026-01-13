@@ -1,9 +1,11 @@
 /**
- * Users Controller
+ * Users Controller - TypeORM Version
  * Handles user/staff management with authentication - Location dependent
  */
 
-const pool = require('../database/dbconn');
+const { getDataSource } = require('../database/typeorm');
+const { User } = require('../entities/User.entity');
+const { Location } = require('../entities/Location.entity');
 const bcrypt = require('bcrypt');
 const { AppError, asyncHandler } = require('../middleware/errorHandler');
 
@@ -16,41 +18,54 @@ const getUsers = asyncHandler(async (req, res) => {
     throw new AppError('Location ID is required', 400);
   }
   
-  let query = `
-    SELECT 
-      u.id, u.location_id, u.email, u.name, u.contact_number, 
-      u.role, u.account_status, u.created_at, u.updated_at,
-      l.name as location_name
-    FROM users u
-    JOIN locations l ON u.location_id = l.id
-    WHERE u.location_id = $1
-  `;
+  const dataSource = await getDataSource();
+  const userRepo = dataSource.getRepository(User);
   
-  const params = [location_id];
+  const queryBuilder = userRepo
+    .createQueryBuilder('user')
+    .leftJoinAndSelect('user.location', 'location')
+    .select([
+      'user.id',
+      'user.location_id',
+      'user.email',
+      'user.name',
+      'user.contact_number',
+      'user.role',
+      'user.account_status',
+      'user.created_at',
+      'user.updated_at',
+      'location.name'
+    ])
+    .where('user.location_id = :locationId', { locationId: location_id })
+    .orderBy('user.created_at', 'DESC');
   
   if (search) {
-    params.push(`%${search}%`);
-    query += ` AND (u.name ILIKE $${params.length} OR u.email ILIKE $${params.length})`;
+    queryBuilder.andWhere(
+      '(user.name ILIKE :search OR user.email ILIKE :search)',
+      { search: `%${search}%` }
+    );
   }
   
   if (role) {
-    params.push(role);
-    query += ` AND u.role = $${params.length}`;
+    queryBuilder.andWhere('user.role = :role', { role });
   }
   
   if (status) {
-    params.push(status);
-    query += ` AND u.account_status = $${params.length}`;
+    queryBuilder.andWhere('user.account_status = :status', { status });
   }
   
-  query += ' ORDER BY u.created_at DESC';
+  const users = await queryBuilder.getMany();
   
-  const result = await pool.query(query, params);
+  // Format response
+  const formatted = users.map(user => ({
+    ...user,
+    location_name: user.location?.name
+  }));
   
   res.status(200).json({
     success: true,
-    count: result.rows.length,
-    data: result.rows
+    count: formatted.length,
+    data: formatted
   });
 });
 
@@ -58,24 +73,35 @@ const getUsers = asyncHandler(async (req, res) => {
 // @route   GET /api/users/:id
 const getUser = asyncHandler(async (req, res) => {
   const { id } = req.params;
+  const dataSource = await getDataSource();
+  const userRepo = dataSource.getRepository(User);
   
-  const result = await pool.query(`
-    SELECT 
-      u.id, u.location_id, u.email, u.name, u.contact_number, 
-      u.role, u.account_status, u.created_at, u.updated_at,
-      l.name as location_name
-    FROM users u
-    JOIN locations l ON u.location_id = l.id
-    WHERE u.id = $1
-  `, [id]);
+  const user = await userRepo.findOne({
+    where: { id },
+    relations: ['location'],
+    select: [
+      'id',
+      'location_id',
+      'email',
+      'name',
+      'contact_number',
+      'role',
+      'account_status',
+      'created_at',
+      'updated_at'
+    ]
+  });
   
-  if (result.rows.length === 0) {
+  if (!user) {
     throw new AppError('User not found', 404);
   }
   
   res.status(200).json({
     success: true,
-    data: result.rows[0]
+    data: {
+      ...user,
+      location_name: user.location?.name
+    }
   });
 });
 
@@ -88,20 +114,30 @@ const createUser = asyncHandler(async (req, res) => {
     throw new AppError('Location ID, email, password, and name are required', 400);
   }
   
+  const dataSource = await getDataSource();
+  const userRepo = dataSource.getRepository(User);
+  
   // Hash password
   const salt = await bcrypt.genSalt(10);
   const password_hash = await bcrypt.hash(password, salt);
   
-  const result = await pool.query(
-    `INSERT INTO users (location_id, email, password_hash, name, contact_number, role)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING id, location_id, email, name, contact_number, role, account_status, created_at`,
-    [location_id, email, password_hash, name, contact_number, role]
-  );
+  const user = userRepo.create({
+    location_id,
+    email,
+    password_hash,
+    name,
+    contact_number: contact_number || null,
+    role
+  });
+  
+  const saved = await userRepo.save(user);
+  
+  // Return without password_hash
+  const { password_hash: _, ...userResponse } = saved;
   
   res.status(201).json({
     success: true,
-    data: result.rows[0]
+    data: userResponse
   });
 });
 
@@ -111,43 +147,35 @@ const updateUser = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { email, name, contact_number, role, account_status, password } = req.body;
   
-  // If password is being updated, hash it
-  let password_hash = null;
-  if (password) {
-    const salt = await bcrypt.genSalt(10);
-    password_hash = await bcrypt.hash(password, salt);
-  }
+  const dataSource = await getDataSource();
+  const userRepo = dataSource.getRepository(User);
   
-  let query = `
-    UPDATE users 
-    SET email = COALESCE($1, email),
-        name = COALESCE($2, name),
-        contact_number = COALESCE($3, contact_number),
-        role = COALESCE($4, role),
-        account_status = COALESCE($5, account_status),
-        updated_at = CURRENT_TIMESTAMP
-  `;
+  const user = await userRepo.findOne({ where: { id } });
   
-  const params = [email, name, contact_number, role, account_status];
-  
-  if (password_hash) {
-    params.push(password_hash);
-    query += `, password_hash = $${params.length}`;
-  }
-  
-  params.push(id);
-  query += ` WHERE id = $${params.length}
-             RETURNING id, location_id, email, name, contact_number, role, account_status, created_at, updated_at`;
-  
-  const result = await pool.query(query, params);
-  
-  if (result.rows.length === 0) {
+  if (!user) {
     throw new AppError('User not found', 404);
   }
   
+  if (email !== undefined) user.email = email;
+  if (name !== undefined) user.name = name;
+  if (contact_number !== undefined) user.contact_number = contact_number;
+  if (role !== undefined) user.role = role;
+  if (account_status !== undefined) user.account_status = account_status;
+  
+  // Update password if provided
+  if (password) {
+    const salt = await bcrypt.genSalt(10);
+    user.password_hash = await bcrypt.hash(password, salt);
+  }
+  
+  const updated = await userRepo.save(user);
+  
+  // Return without password_hash
+  const { password_hash: _, ...userResponse } = updated;
+  
   res.status(200).json({
     success: true,
-    data: result.rows[0]
+    data: userResponse
   });
 });
 
@@ -155,10 +183,12 @@ const updateUser = asyncHandler(async (req, res) => {
 // @route   DELETE /api/users/:id
 const deleteUser = asyncHandler(async (req, res) => {
   const { id } = req.params;
+  const dataSource = await getDataSource();
+  const userRepo = dataSource.getRepository(User);
   
-  const result = await pool.query('DELETE FROM users WHERE id = $1 RETURNING id', [id]);
+  const result = await userRepo.delete({ id });
   
-  if (result.rows.length === 0) {
+  if (result.affected === 0) {
     throw new AppError('User not found', 404);
   }
   
@@ -177,20 +207,17 @@ const loginUser = asyncHandler(async (req, res) => {
     throw new AppError('Email and password are required', 400);
   }
   
-  // Find user
-  const result = await pool.query(
-    `SELECT u.*, l.name as location_name 
-     FROM users u 
-     JOIN locations l ON u.location_id = l.id
-     WHERE u.email = $1`,
-    [email]
-  );
+  const dataSource = await getDataSource();
+  const userRepo = dataSource.getRepository(User);
   
-  if (result.rows.length === 0) {
+  const user = await userRepo.findOne({
+    where: { email },
+    relations: ['location']
+  });
+  
+  if (!user) {
     throw new AppError('Invalid credentials', 401);
   }
-  
-  const user = result.rows[0];
   
   // Check if account is active
   if (user.account_status !== 'active') {
@@ -205,14 +232,15 @@ const loginUser = asyncHandler(async (req, res) => {
   }
   
   // Return user without password_hash
-  // For now, using user ID as token (simple implementation)
-  // TODO: Implement proper JWT
   const { password_hash, ...userWithoutPassword } = user;
   
   res.status(200).json({
     success: true,
     data: {
-      user: userWithoutPassword,
+      user: {
+        ...userWithoutPassword,
+        location_name: user.location?.name
+      },
       token: user.id  // Simple token - replace with JWT in production
     }
   });
@@ -222,19 +250,39 @@ const loginUser = asyncHandler(async (req, res) => {
 // @route   GET /api/users/me
 const getMe = asyncHandler(async (req, res) => {
   // req.user is set by the protect middleware
-  const result = await pool.query(`
-    SELECT 
-      u.id, u.location_id, u.email, u.name, u.contact_number, 
-      u.role, u.account_status, u.created_at, u.updated_at,
-      l.name as location_name
-    FROM users u
-    JOIN locations l ON u.location_id = l.id
-    WHERE u.id = $1
-  `, [req.user.id]);
+  if (!req.user || !req.user.id) {
+    throw new AppError('Not authenticated', 401);
+  }
+  
+  const dataSource = await getDataSource();
+  const userRepo = dataSource.getRepository(User);
+  
+  const user = await userRepo.findOne({
+    where: { id: req.user.id },
+    relations: ['location'],
+    select: [
+      'id',
+      'location_id',
+      'email',
+      'name',
+      'contact_number',
+      'role',
+      'account_status',
+      'created_at',
+      'updated_at'
+    ]
+  });
+  
+  if (!user) {
+    throw new AppError('User not found', 404);
+  }
   
   res.status(200).json({
     success: true,
-    data: result.rows[0]
+    data: {
+      ...user,
+      location_name: user.location?.name
+    }
   });
 });
 
@@ -247,4 +295,3 @@ module.exports = {
   loginUser,
   getMe
 };
-
