@@ -7,9 +7,15 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "migrate": "node src/database/migrate.js",
+    "test:typeorm": "node src/scripts/test-typeorm.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": ["meal-prep", "food", "admin", "dashboard"],
+  "keywords": [
+    "meal-prep",
+    "food",
+    "admin",
+    "dashboard"
+  ],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
@@ -19,6 +25,8 @@
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "pg": "^8.16.3",
+    "reflect-metadata": "^0.2.2",
+    "typeorm": "^0.3.28",
     "uuid": "^9.0.0"
   },
   "devDependencies": {
