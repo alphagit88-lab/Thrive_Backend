@@ -1,3 +1,5 @@
+// Load reflect-metadata FIRST (required for TypeORM decorators)
+require('reflect-metadata');
 require('dotenv').config();
 
 const PORT = process.env.PORT || 5000;
