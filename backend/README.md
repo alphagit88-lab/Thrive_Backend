@@ -322,27 +322,8 @@ origin: process.env.FRONTEND_URL || 'http://localhost:3000'
 - Supports both raw SQL and TypeORM
 - Connection retry logic included
 
-## 🐛 Troubleshooting
 
-### Common Issues
 
-1. **Database Connection Failed**
-   - Check PostgreSQL service is running
-   - Verify credentials in .env file
-   - Ensure database exists
-
-2. **TypeORM Sync Issues**
-   - Run `npm run test:typeorm`
-   - Check entity definitions
-   - Verify database permissions
-
-3. **CORS Errors**
-   - Update FRONTEND_URL in .env
-   - Check allowed methods and headers
-
-4. **Port Already in Use**
-   - Change PORT in .env file
-   - Check for running processes: `netstat -ano | findstr :5000`
 
 ## 📊 Monitoring & Logging
 
@@ -351,32 +332,12 @@ origin: process.env.FRONTEND_URL || 'http://localhost:3000'
 - Request/response logging in development
 - Database query logging (configurable)
 
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Follow the existing code structure and patterns
-4. Add proper error handling
-5. Test your changes thoroughly
-6. Commit your changes (`git commit -m 'Add amazing feature'`)
-7. Push to the branch (`git push origin feature/amazing-feature`)
-8. Open a Pull Request
 
 ## 📄 License
 
 This project is part of the Thrive Restaurant Management System.
 
-## 🆘 Support
 
-For issues and questions:
-
-1. Check the troubleshooting section
-2. Review the API documentation
-3. Examine server logs for detailed error information
-4. Create an issue with detailed information including:
-   - Error messages
-   - Steps to reproduce
-   - Environment details
 
 ## 🔗 Related Resources
 
