@@ -11,13 +11,40 @@ const { getLocationFilter } = require('./middleware/auth');
 const app = express();
 
 // Middleware
-// CORS configuration - allows frontend domain in production
-app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+// CORS configuration - allows frontend domains in production and preview deployments
+const allowedOrigins = [
+  'http://localhost:3000', // Local development
+  process.env.FRONTEND_URL, // Production frontend URL
+  ...(process.env.FRONTEND_URLS ? process.env.FRONTEND_URLS.split(',') : []) // Multiple frontend URLs
+].filter(Boolean); // Remove undefined values
+
+// CORS origin function - allows Vercel preview deployments
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, Postman, etc.)
+    if (!origin) {
+      return callback(null, true);
+    }
+
+    // Check if origin is in allowed list
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    // Allow all Vercel preview deployments (*.vercel.app)
+    if (origin.includes('.vercel.app')) {
+      return callback(null, true);
+    }
+
+    // Reject other origins
+    callback(new Error('Not allowed by CORS'));
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Location-Id']
-}));
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
