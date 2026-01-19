@@ -1,9 +1,10 @@
 /**
  * Authentication Middleware
- * For now, simple token-based auth. Can be upgraded to JWT later.
+ * Simple token-based auth using user ID as token
  */
 
-const pool = require('../database/dbconn');
+const { getDataSource } = require('../database/typeorm');
+const { User } = require('../entities/User.entity');
 const { AppError } = require('./errorHandler');
 
 // Protect routes - require authentication
@@ -20,19 +21,30 @@ const protect = async (req, res, next) => {
       return next(new AppError('Not authorized to access this route', 401));
     }
 
-    // For now, token is the user ID (simple implementation)
-    // TODO: Implement proper JWT authentication
-    const result = await pool.query(
-      'SELECT id, email, name, role, location_id FROM users WHERE id = $1 AND account_status = $2',
-      [token, 'active']
-    );
+    // Token is the user ID (simple implementation)
+    const dataSource = await getDataSource();
+    const userRepo = dataSource.getRepository(User);
+    
+    const user = await userRepo.findOne({
+      where: { 
+        id: token,
+        account_status: 'active'
+      },
+      select: ['id', 'email', 'name', 'role', 'location_id', 'account_status']
+    });
 
-    if (result.rows.length === 0) {
+    if (!user) {
       return next(new AppError('User not found or inactive', 401));
     }
 
     // Add user to request
-    req.user = result.rows[0];
+    req.user = {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      location_id: user.location_id
+    };
     next();
   } catch (error) {
     next(new AppError('Not authorized to access this route', 401));

@@ -105,21 +105,48 @@ const getUser = asyncHandler(async (req, res) => {
   });
 });
 
-// @desc    Create user
+// @desc    Create user (Admin only)
 // @route   POST /api/users
 const createUser = asyncHandler(async (req, res) => {
-  const { location_id, email, password, name, contact_number, role = 'staff' } = req.body;
+  const { location_id, email, password, name, contact_number, role, account_status } = req.body;
   
-  if (!location_id || !email || !password || !name) {
-    throw new AppError('Location ID, email, password, and name are required', 400);
+  // Admin-only endpoint - location_id is required
+  if (!email || !password || !name) {
+    throw new AppError('Email, password, and name are required', 400);
+  }
+  
+  if (!location_id) {
+    throw new AppError('Location ID is required', 400);
   }
   
   const dataSource = await getDataSource();
   const userRepo = dataSource.getRepository(User);
+  const locationRepo = dataSource.getRepository(Location);
+  
+  // Verify location exists
+  const location = await locationRepo.findOne({ where: { id: location_id } });
+  if (!location) {
+    throw new AppError('Location not found', 404);
+  }
+  
+  // Check if email already exists for this location
+  const existingUser = await userRepo.findOne({ 
+    where: { 
+      email,
+      location_id 
+    } 
+  });
+  if (existingUser) {
+    throw new AppError('Email already registered for this location', 400);
+  }
   
   // Hash password
   const salt = await bcrypt.genSalt(10);
   const password_hash = await bcrypt.hash(password, salt);
+  
+  // Set defaults - admins can override
+  const finalRole = role || 'staff';
+  const finalAccountStatus = account_status || 'active';
   
   const user = userRepo.create({
     location_id,
@@ -127,7 +154,8 @@ const createUser = asyncHandler(async (req, res) => {
     password_hash,
     name,
     contact_number: contact_number || null,
-    role
+    role: finalRole,
+    account_status: finalAccountStatus
   });
   
   const saved = await userRepo.save(user);
@@ -198,6 +226,61 @@ const deleteUser = asyncHandler(async (req, res) => {
   });
 });
 
+// @desc    Admin signup (public)
+// @route   POST /api/users/signup
+const signupUser = asyncHandler(async (req, res) => {
+  const { email, password, name, contact_number } = req.body;
+  
+  if (!email || !password || !name) {
+    throw new AppError('Email, password, and name are required', 400);
+  }
+  
+  const dataSource = await getDataSource();
+  const userRepo = dataSource.getRepository(User);
+  const locationRepo = dataSource.getRepository(Location);
+  
+  // Check if email already exists
+  const existingUser = await userRepo.findOne({ where: { email } });
+  if (existingUser) {
+    throw new AppError('Email already registered', 400);
+  }
+  
+  // Get first active location as default for admin signup
+  const firstLocation = await locationRepo.findOne({
+    where: { status: 'active' },
+    order: { created_at: 'ASC' }
+  });
+  
+  if (!firstLocation) {
+    throw new AppError('No active location found. Please contact administrator.', 400);
+  }
+  
+  // Hash password
+  const salt = await bcrypt.genSalt(10);
+  const password_hash = await bcrypt.hash(password, salt);
+  
+  // Admin signup - automatically activate account
+  const user = userRepo.create({
+    location_id: firstLocation.id,
+    email,
+    password_hash,
+    name,
+    contact_number: contact_number || null,
+    role: 'admin', // Default to admin role for signups
+    account_status: 'active' // Auto-activate admin accounts
+  });
+  
+  const saved = await userRepo.save(user);
+  
+  // Return without password_hash
+  const { password_hash: _, ...userResponse } = saved;
+  
+  res.status(201).json({
+    success: true,
+    data: userResponse
+  });
+});
+
 // @desc    Login user
 // @route   POST /api/users/login
 const loginUser = asyncHandler(async (req, res) => {
@@ -219,16 +302,30 @@ const loginUser = asyncHandler(async (req, res) => {
     throw new AppError('Invalid credentials', 401);
   }
   
-  // Check if account is active
-  if (user.account_status !== 'active') {
-    throw new AppError('Account is not active', 401);
-  }
-  
-  // Verify password
+  // Verify password first
   const isMatch = await bcrypt.compare(password, user.password_hash);
   
   if (!isMatch) {
     throw new AppError('Invalid credentials', 401);
+  }
+  
+  // Auto-activate admin accounts if they're inactive
+  if (user.account_status !== 'active' && user.role === 'admin') {
+    user.account_status = 'active';
+    await userRepo.save(user);
+    // Reload user to get updated data
+    const updatedUser = await userRepo.findOne({
+      where: { id: user.id },
+      relations: ['location']
+    });
+    if (updatedUser) {
+      user.account_status = updatedUser.account_status;
+    }
+  }
+  
+  // Check if account is active (after auto-activation)
+  if (user.account_status !== 'active') {
+    throw new AppError('Account is not active', 401);
   }
   
   // Return user without password_hash
@@ -292,6 +389,7 @@ module.exports = {
   createUser,
   updateUser,
   deleteUser,
+  signupUser,
   loginUser,
   getMe
 };

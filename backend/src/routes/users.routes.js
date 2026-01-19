@@ -12,25 +12,27 @@ const {
   createUser,
   updateUser,
   deleteUser,
+  signupUser,
   loginUser,
   getMe
 } = require('../controllers/users.controller');
 
 // Public routes
+router.post('/signup', signupUser);
 router.post('/login', loginUser);
 
 // Protected routes
 router.get('/me', protect, getMe);
 
-// Standard CRUD routes
+// Standard CRUD routes - all require authentication
 router.route('/')
-  .get(getUsers)
-  .post(createUser);
+  .get(protect, getUsers)
+  .post(protect, createUser);
 
 router.route('/:id')
-  .get(getUser)
-  .put(updateUser)
-  .delete(deleteUser);
+  .get(protect, getUser)
+  .put(protect, updateUser)
+  .delete(protect, deleteUser);
 
 module.exports = router;
 
