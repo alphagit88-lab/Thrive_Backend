@@ -12,10 +12,12 @@ const { AppError, asyncHandler } = require('../middleware/errorHandler');
 // @desc    Get all users (filtered by location)
 // @route   GET /api/users
 const getUsers = asyncHandler(async (req, res) => {
-  const { location_id, search, role, status } = req.query;
+  const { search, role, status } = req.query;
   
-  if (!location_id) {
-    throw new AppError('Location ID is required', 400);
+  // Enforce location restriction - users can only see users from their own location
+  const userLocationId = req.user?.location_id;
+  if (!userLocationId) {
+    throw new AppError('User location not found', 403);
   }
   
   const dataSource = await getDataSource();
@@ -36,7 +38,7 @@ const getUsers = asyncHandler(async (req, res) => {
       'user.updated_at',
       'location.name'
     ])
-    .where('user.location_id = :locationId', { locationId: location_id })
+    .where('user.location_id = :locationId', { locationId: userLocationId })
     .orderBy('user.created_at', 'DESC');
   
   if (search) {
@@ -73,11 +75,17 @@ const getUsers = asyncHandler(async (req, res) => {
 // @route   GET /api/users/:id
 const getUser = asyncHandler(async (req, res) => {
   const { id } = req.params;
+  const userLocationId = req.user?.location_id;
+  
+  if (!userLocationId) {
+    throw new AppError('User location not found', 403);
+  }
+  
   const dataSource = await getDataSource();
   const userRepo = dataSource.getRepository(User);
   
   const user = await userRepo.findOne({
-    where: { id },
+    where: { id, location_id: userLocationId },
     relations: ['location'],
     select: [
       'id',
@@ -93,7 +101,7 @@ const getUser = asyncHandler(async (req, res) => {
   });
   
   if (!user) {
-    throw new AppError('User not found', 404);
+    throw new AppError('User not found or access denied', 404);
   }
   
   res.status(200).json({
@@ -108,23 +116,24 @@ const getUser = asyncHandler(async (req, res) => {
 // @desc    Create user (Admin only)
 // @route   POST /api/users
 const createUser = asyncHandler(async (req, res) => {
-  const { location_id, email, password, name, contact_number, role, account_status } = req.body;
+  const { email, password, name, contact_number, role, account_status } = req.body;
   
-  // Admin-only endpoint - location_id is required
-  if (!email || !password || !name) {
-    throw new AppError('Email, password, and name are required', 400);
+  // Enforce location restriction - users can only create users for their own location
+  const userLocationId = req.user?.location_id;
+  if (!userLocationId) {
+    throw new AppError('User location not found', 403);
   }
   
-  if (!location_id) {
-    throw new AppError('Location ID is required', 400);
+  if (!email || !password || !name) {
+    throw new AppError('Email, password, and name are required', 400);
   }
   
   const dataSource = await getDataSource();
   const userRepo = dataSource.getRepository(User);
   const locationRepo = dataSource.getRepository(Location);
   
-  // Verify location exists
-  const location = await locationRepo.findOne({ where: { id: location_id } });
+  // Verify location exists and user has access to it
+  const location = await locationRepo.findOne({ where: { id: userLocationId } });
   if (!location) {
     throw new AppError('Location not found', 404);
   }
@@ -133,7 +142,7 @@ const createUser = asyncHandler(async (req, res) => {
   const existingUser = await userRepo.findOne({ 
     where: { 
       email,
-      location_id 
+      location_id: userLocationId 
     } 
   });
   if (existingUser) {
@@ -149,7 +158,7 @@ const createUser = asyncHandler(async (req, res) => {
   const finalAccountStatus = account_status || 'active';
   
   const user = userRepo.create({
-    location_id,
+    location_id: userLocationId,
     email,
     password_hash,
     name,
@@ -174,14 +183,20 @@ const createUser = asyncHandler(async (req, res) => {
 const updateUser = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { email, name, contact_number, role, account_status, password } = req.body;
+  const userLocationId = req.user?.location_id;
+  
+  if (!userLocationId) {
+    throw new AppError('User location not found', 403);
+  }
   
   const dataSource = await getDataSource();
   const userRepo = dataSource.getRepository(User);
   
-  const user = await userRepo.findOne({ where: { id } });
+  // Ensure user can only update users from their own location
+  const user = await userRepo.findOne({ where: { id, location_id: userLocationId } });
   
   if (!user) {
-    throw new AppError('User not found', 404);
+    throw new AppError('User not found or access denied', 404);
   }
   
   if (email !== undefined) user.email = email;
@@ -211,13 +226,20 @@ const updateUser = asyncHandler(async (req, res) => {
 // @route   DELETE /api/users/:id
 const deleteUser = asyncHandler(async (req, res) => {
   const { id } = req.params;
+  const userLocationId = req.user?.location_id;
+  
+  if (!userLocationId) {
+    throw new AppError('User location not found', 403);
+  }
+  
   const dataSource = await getDataSource();
   const userRepo = dataSource.getRepository(User);
   
-  const result = await userRepo.delete({ id });
+  // Ensure user can only delete users from their own location
+  const result = await userRepo.delete({ id, location_id: userLocationId });
   
   if (result.affected === 0) {
-    throw new AppError('User not found', 404);
+    throw new AppError('User not found or access denied', 404);
   }
   
   res.status(200).json({
