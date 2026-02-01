@@ -8,32 +8,39 @@ const { Pool } = require('pg');
 const fs = require('fs');
 const path = require('path');
 
+// Configure SSL for Neon (production) or disable for local development
+const isProduction = process.env.NODE_ENV === 'production';
+
+// Support both DATABASE_URL (local) and POSTGRES_URL (Vercel/Neon)
+const connectionString = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: connectionString,
+  ssl: isProduction ? { rejectUnauthorized: false } : false,
 });
 
 async function runMigration() {
   const client = await pool.connect();
-  
+
   try {
     console.log('🚀 Starting database migration...\n');
-    
+
     // Read schema.sql
     const schemaPath = path.join(__dirname, 'schema.sql');
     const schema = fs.readFileSync(schemaPath, 'utf8');
-    
+
     console.log('📋 Running schema.sql...');
     await client.query(schema);
     console.log('✅ Schema created successfully!\n');
-    
+
     // Read seed.sql
     const seedPath = path.join(__dirname, 'seed.sql');
     const seed = fs.readFileSync(seedPath, 'utf8');
-    
+
     console.log('🌱 Running seed.sql...');
     await client.query(seed);
     console.log('✅ Seed data inserted successfully!\n');
-    
+
     // Verify tables
     const tables = await client.query(`
       SELECT table_name 
@@ -41,21 +48,21 @@ async function runMigration() {
       WHERE table_schema = 'public' 
       ORDER BY table_name;
     `);
-    
+
     console.log('📊 Created tables:');
     tables.rows.forEach((row, index) => {
       console.log(`   ${index + 1}. ${row.table_name}`);
     });
-    
+
     // Verify food categories
     const categories = await client.query('SELECT name FROM food_categories ORDER BY display_order');
     console.log('\n🍽️  Food Categories:');
     categories.rows.forEach(row => {
       console.log(`   - ${row.name}`);
     });
-    
+
     console.log('\n✨ Migration completed successfully!');
-    
+
   } catch (error) {
     console.error('❌ Migration failed:', error.message);
     console.error('\nFull error:', error);

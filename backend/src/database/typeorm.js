@@ -23,9 +23,16 @@ const { OrderItem } = require('../entities/OrderItem.entity');
 const { Customer } = require('../entities/Customer.entity');
 const { User } = require('../entities/User.entity');
 
+// Configure SSL for Neon (production) or disable for local development
+const isProduction = process.env.NODE_ENV === 'production';
+
+// Support both DATABASE_URL (local) and POSTGRES_URL (Vercel/Neon)
+const connectionString = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+
 const AppDataSource = new DataSource({
   type: 'postgres',
-  url: process.env.DATABASE_URL,
+  url: connectionString,
+  ssl: isProduction ? { rejectUnauthorized: false } : false,
   entities: [
     Location,
     FoodCategory,
