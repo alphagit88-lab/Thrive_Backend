@@ -2,15 +2,15 @@
 require('reflect-metadata');
 require('dotenv').config();
 
-const PORT = process.env.PORT || 5000;
+const app = require('./app');
 
-try {
-  const app = require('./app');
-  
+// For local development - start the server
+if (process.env.NODE_ENV !== 'production') {
+  const PORT = process.env.PORT || 5000;
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
   });
-} catch (error) {
-  console.error('Failed to start server:', error);
-  process.exit(1);
 }
+
+// Export the app for Vercel serverless
+module.exports = app;
