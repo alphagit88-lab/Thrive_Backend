@@ -1,9 +1,21 @@
-// Vercel Serverless Function Entry Point
-// Load reflect-metadata FIRST (required for TypeORM decorators)
+// Vercel Serverless Function Entry Point for Express.js
 require('reflect-metadata');
 require('dotenv').config();
 
-const app = require('../src/app');
+const express = require('express');
+const cors = require('cors');
 
-// Export the Express app as a serverless function handler
+// Import the main app configuration
+const mainApp = require('../src/app');
+
+// Create a wrapper for Vercel
+const app = express();
+
+// Trust proxy for Vercel
+app.set('trust proxy', 1);
+
+// Mount the main app
+app.use('/', mainApp);
+
+// Export for Vercel
 module.exports = app;
