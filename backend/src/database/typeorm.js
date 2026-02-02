@@ -57,7 +57,7 @@ const AppDataSource = new DataSource({
   extra: {
     max: 20, // Maximum pool size
     idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 2000,
+    connectionTimeoutMillis: 30000,
   }
 });
 
