@@ -137,6 +137,10 @@ const createIngredient = asyncHandler(async (req, res) => {
   const normalizedFoodTypeId = (food_type_id && food_type_id !== '' && food_type_id !== 'null' && food_type_id !== 'undefined') ? food_type_id : null;
   const normalizedLocationId = (location_id && location_id !== '' && location_id !== 'null' && location_id !== 'undefined') ? location_id : null;
   
+  if (!name || !name.trim()) {
+    throw new AppError('Ingredient name is required', 400);
+  }
+  
   if (!normalizedFoodTypeId) {
     throw new AppError('Food type ID is required and must be valid', 400);
   }
@@ -252,7 +256,10 @@ const updateIngredient = asyncHandler(async (req, res) => {
     if (food_type_id !== undefined) {
       ingredient.food_type_id = (food_type_id && food_type_id !== '' && food_type_id !== 'null' && food_type_id !== 'undefined') ? food_type_id : null;
     }
-    if (name !== undefined) ingredient.name = name;
+    if (name !== undefined) {
+        if (!name || !name.trim()) throw new AppError('Ingredient name cannot be empty', 400);
+        ingredient.name = name;
+    }
     if (description !== undefined) ingredient.description = description;
     if (is_active !== undefined) ingredient.is_active = is_active;
     
