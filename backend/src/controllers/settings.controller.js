@@ -510,7 +510,7 @@ module.exports = {
   updateCategory,
   deleteCategory,
   // Types
-  getTypes,
+  getFoodTypes,
   getType,
   createType,
   updateType,

@@ -13,7 +13,7 @@ const {
   updateCategory,
   deleteCategory,
   // Types
-  getTypes,
+  getFoodTypes,
   getType,
   createType,
   updateType,
@@ -42,7 +42,7 @@ router.route('/categories/:id')
 
 // Food Types
 router.route('/types')
-  .get(getTypes)
+  .get(getFoodTypes)
   .post(createType);
 
 router.route('/types/:id')
