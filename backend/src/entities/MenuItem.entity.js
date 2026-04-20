@@ -38,14 +38,6 @@ const MenuItem = new EntitySchema({
       length: 100,
       nullable: true
     },
-    specification_id: {
-      type: 'uuid',
-      nullable: true
-    },
-    cook_type_id: {
-      type: 'uuid',
-      nullable: true
-    },
     description: {
       type: 'text',
       nullable: true
@@ -87,6 +79,34 @@ const MenuItem = new EntitySchema({
         name: 'location_id'
       },
       onDelete: 'CASCADE'
+    },
+    specifications: {
+      type: 'many-to-many',
+      target: 'Specification',
+      joinTable: {
+        name: 'menu_item_specifications',
+        joinColumn: { name: 'menu_item_id', referencedColumnName: 'id' },
+        inverseJoinColumn: { name: 'specification_id', referencedColumnName: 'id' }
+      }
+    },
+    cookTypes: {
+      type: 'many-to-many',
+      target: 'CookType',
+      joinTable: {
+        name: 'menu_item_cook_types',
+        joinColumn: { name: 'menu_item_id', referencedColumnName: 'id' },
+        inverseJoinColumn: { name: 'cook_type_id', referencedColumnName: 'id' }
+      }
+    },
+    ingredients: {
+      type: 'one-to-many',
+      target: 'MenuItemIngredient',
+      inverseSide: 'menuItem'
+    },
+    photos: {
+      type: 'one-to-many',
+      target: 'MenuItemPhoto',
+      inverseSide: 'menuItem'
     }
   }
 });

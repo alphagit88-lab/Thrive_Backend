@@ -16,6 +16,11 @@ const Specification = new EntitySchema({
     food_type_id: {
       type: 'uuid'
     },
+    location_id: {
+      type: 'uuid',
+      name: 'location_id',
+      nullable: true
+    },
     name: {
       type: 'varchar',
       length: 100
@@ -33,6 +38,12 @@ const Specification = new EntitySchema({
         name: 'food_type_id'
       },
       onDelete: 'CASCADE'
+    },
+    location: {
+      type: 'many-to-one',
+      target: 'Location',
+      joinColumn: { name: 'location_id' },
+      nullable: true
     }
   },
   indices: [

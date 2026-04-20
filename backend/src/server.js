@@ -1,3 +1,4 @@
+// Triggering restart to refresh entity metadata
 // Load reflect-metadata FIRST (required for TypeORM decorators)
 require('reflect-metadata');
 require('dotenv').config();

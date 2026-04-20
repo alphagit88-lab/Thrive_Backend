@@ -60,3 +60,10 @@ temp/
 # Optional: Test/Development files (uncomment if you want to exclude)
 # src/routes/test-typeorm.routes.js
 # src/scripts/test-typeorm.js
+
+# Agent generated files
+.gemini/
+scratch/
+check-*.js
+update-*.js
+create-*.js

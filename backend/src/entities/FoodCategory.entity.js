@@ -13,10 +13,14 @@ const FoodCategory = new EntitySchema({
       primary: true,
       generated: 'uuid'
     },
+    location_id: {
+      type: 'uuid',
+      name: 'location_id',
+      nullable: true
+    },
     name: {
       type: 'varchar',
-      length: 100,
-      unique: true
+      length: 100
     },
     display_order: {
       type: 'int',
@@ -37,6 +41,14 @@ const FoodCategory = new EntitySchema({
     updated_at: {
       type: 'timestamp',
       updateDate: true
+    }
+  },
+  relations: {
+    location: {
+      type: 'many-to-one',
+      target: 'Location',
+      joinColumn: { name: 'location_id' },
+      nullable: true
     }
   }
 });

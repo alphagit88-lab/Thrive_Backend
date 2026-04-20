@@ -31,21 +31,11 @@ const getMenuItems = asyncHandler(async (req, res) => {
   const queryBuilder = menuItemRepo
     .createQueryBuilder('menuItem')
     .leftJoinAndSelect('menuItem.location', 'location')
-    .leftJoin('food_categories', 'category', 'category.id = menuItem.food_category_id')
-    .leftJoin('food_types', 'foodType', 'foodType.id = menuItem.food_type_id')
-    .leftJoin('specifications', 'spec', 'spec.id = menuItem.specification_id')
-    .leftJoin('cook_types', 'cookType', 'cookType.id = menuItem.cook_type_id')
-    .leftJoin('menu_item_photos', 'photo', 'photo.menu_item_id = menuItem.id')
-    .where('menuItem.location_id = :locationId', { locationId: location_id })
-    .addSelect('category.name', 'category_name')
-    .addSelect('foodType.name', 'food_type_name')
-    .addSelect('spec.name', 'specification_name')
-    .addSelect('cookType.name', 'cook_type_name')
-    .addSelect('location.name', 'location_name')
-    .addSelect('photo.id', 'photo_id')
-    .addSelect('photo.photo_url', 'photo_url')
-    .addSelect('photo.display_order', 'photo_display_order')
-    .orderBy('menuItem.created_at', 'DESC');
+    .leftJoinAndSelect('menuItem.specifications', 'specifications')
+    .leftJoinAndSelect('menuItem.cookTypes', 'cookTypes')
+    .leftJoinAndSelect('menuItem.photos', 'photos')
+    .leftJoinAndSelect('menuItem.ingredients', 'ingredients')
+    .where('menuItem.location_id = :locationId', { locationId: location_id });
   
   if (status) {
     queryBuilder.andWhere('menuItem.status = :status', { status });
@@ -61,63 +51,54 @@ const getMenuItems = asyncHandler(async (req, res) => {
   if (category_id) {
     queryBuilder.andWhere('menuItem.food_category_id = :categoryId', { categoryId: category_id });
   }
+
+  queryBuilder.orderBy('menuItem.created_at', 'DESC');
   
   const menuItems = await queryBuilder.getMany();
   
-  // Get photos separately and group
-  const menuItemIds = menuItems.map(m => m.id);
-  const photos = menuItemIds.length > 0 
-    ? await dataSource.getRepository(MenuItemPhoto).find({
-        where: menuItemIds.map(id => ({ menu_item_id: id })),
-        order: { display_order: 'ASC' }
-      })
-    : [];
+  // Format response and add extra names
+  const formatted = await Promise.all(menuItems.map(async (item) => {
+    // Fetch Category and Food Type names if not already included
+    const category = item.food_category_id 
+      ? await dataSource.getRepository(FoodCategory).findOne({ where: { id: item.food_category_id } })
+      : null;
+    const foodType = item.food_type_id
+      ? await dataSource.getRepository(FoodType).findOne({ where: { id: item.food_type_id } })
+      : null;
 
-  // Get ingredients separately
-  const menuIngredients = menuItemIds.length > 0
-    ? await dataSource.getRepository(MenuItemIngredient).find({
-        where: menuItemIds.map(id => ({ menu_item_id: id }))
-      })
-    : [];
+    // Fetch ingredient details for each menu item ingredient
+    const ingredients = await Promise.all((item.ingredients || []).map(async (mi) => {
+      const ingredient = await dataSource.getRepository(Ingredient).findOne({
+        where: { id: mi.ingredient_id },
+        relations: ['foodType']
+      });
+      
+      const quantity = mi.ingredient_quantity_id
+        ? await dataSource.getRepository(IngredientQuantity).findOne({
+            where: { id: mi.ingredient_quantity_id }
+          })
+        : null;
+      
+      return {
+        ...mi,
+        ingredient_name: ingredient?.name,
+        food_type_name: ingredient?.foodType?.name,
+        quantity_value: quantity?.quantity_value,
+        quantity_price: quantity?.price
+      };
+    }));
 
-  // Group photos by menu_item_id
-  const photosByMenuItem = {};
-  photos.forEach(photo => {
-    if (!photosByMenuItem[photo.menu_item_id]) {
-      photosByMenuItem[photo.menu_item_id] = [];
-    }
-    photosByMenuItem[photo.menu_item_id].push({
-      id: photo.id,
-      photo_url: photo.photo_url,
-      display_order: photo.display_order
-    });
-  });
-
-  // Group ingredients by menu_item_id
-  const ingredientsByMenuItem = {};
-  menuIngredients.forEach(menuIng => {
-    if (!ingredientsByMenuItem[menuIng.menu_item_id]) {
-      ingredientsByMenuItem[menuIng.menu_item_id] = [];
-    }
-    ingredientsByMenuItem[menuIng.menu_item_id].push({
-      id: menuIng.id,
-      menu_item_id: menuIng.menu_item_id,
-      ingredient_id: menuIng.ingredient_id,
-      ingredient_quantity_id: menuIng.ingredient_quantity_id,
-      custom_quantity: menuIng.custom_quantity
-    });
-  });
-
-  // Format response
-  const formatted = menuItems.map(item => ({
-    ...item,
-    category_name: item.category_name,
-    food_type_name: item.food_type_name,
-    specification_name: item.specification_name,
-    cook_type_name: item.cook_type_name,
-    location_name: item.location?.name,
-    photos: photosByMenuItem[item.id] || [],
-    ingredients: ingredientsByMenuItem[item.id] || []
+    return {
+      ...item,
+      category_name: category?.name,
+      food_type_name: foodType?.name,
+      specification_ids: item.specifications?.map(s => s.id) || [],
+      specification_names: item.specifications?.map(s => s.name) || [],
+      cook_type_ids: item.cookTypes?.map(c => c.id) || [],
+      cook_type_names: item.cookTypes?.map(c => c.name) || [],
+      location_name: item.location?.name,
+      ingredients
+    };
   }));
   
   res.status(200).json({
@@ -136,42 +117,26 @@ const getMenuItem = asyncHandler(async (req, res) => {
   
   const menuItem = await menuItemRepo.findOne({
     where: { id },
-    relations: ['location']
+    relations: ['location', 'specifications', 'cookTypes', 'photos', 'ingredients']
   });
   
   if (!menuItem) {
     throw new AppError('Menu item not found', 404);
   }
   
-  // Get related data
-  const [category, foodType, specification, cookType] = await Promise.all([
+  // Get related data names
+  const [category, foodType] = await Promise.all([
     menuItem.food_category_id 
       ? dataSource.getRepository(FoodCategory).findOne({ where: { id: menuItem.food_category_id } })
       : null,
     menuItem.food_type_id
       ? dataSource.getRepository(FoodType).findOne({ where: { id: menuItem.food_type_id } })
-      : null,
-    menuItem.specification_id
-      ? dataSource.getRepository(Specification).findOne({ where: { id: menuItem.specification_id } })
-      : null,
-    menuItem.cook_type_id
-      ? dataSource.getRepository(CookType).findOne({ where: { id: menuItem.cook_type_id } })
       : null
   ]);
-  
-  // Get photos
-  const photos = await dataSource.getRepository(MenuItemPhoto).find({
-    where: { menu_item_id: id },
-    order: { display_order: 'ASC' }
-  });
-  
-  // Get ingredients with relations
-  const menuIngredients = await dataSource.getRepository(MenuItemIngredient).find({
-    where: { menu_item_id: id }
-  });
-  
+
+  // Format ingredients details
   const ingredients = await Promise.all(
-    menuIngredients.map(async (mi) => {
+    menuItem.ingredients.map(async (mi) => {
       const ingredient = await dataSource.getRepository(Ingredient).findOne({
         where: { id: mi.ingredient_id },
         relations: ['foodType']
@@ -199,11 +164,12 @@ const getMenuItem = asyncHandler(async (req, res) => {
       ...menuItem,
       category_name: category?.name,
       food_type_name: foodType?.name,
-      specification_name: specification?.name,
-      cook_type_name: cookType?.name,
+      specification_ids: menuItem.specifications?.map(s => s.id) || [],
+      specification_names: menuItem.specifications?.map(s => s.name) || [],
+      cook_type_ids: menuItem.cookTypes?.map(c => c.id) || [],
+      cook_type_names: menuItem.cookTypes?.map(c => c.name) || [],
       location_name: menuItem.location?.name,
-      photos: photos,
-      ingredients: ingredients
+      ingredients
     }
   });
 });
@@ -217,8 +183,8 @@ const createMenuItem = asyncHandler(async (req, res) => {
     food_category_id,
     food_type_id,
     quantity,
-    specification_id,
-    cook_type_id,
+    specification_ids = [],
+    cook_type_ids = [],
     description,
     price,
     tags,
@@ -238,16 +204,26 @@ const createMenuItem = asyncHandler(async (req, res) => {
     const menuItemRepo = manager.getRepository(MenuItem);
     const photoRepo = manager.getRepository(MenuItemPhoto);
     const ingredientRepo = manager.getRepository(MenuItemIngredient);
+    const specRepo = manager.getRepository(Specification);
+    const cookTypeRepo = manager.getRepository(CookType);
     
+    // Fetch specs and cook types to associate
+    const specs = specification_ids.length > 0 
+      ? await specRepo.findByIds(specification_ids) 
+      : [];
+    const cookTypes = cook_type_ids.length > 0 
+      ? await cookTypeRepo.findByIds(cook_type_ids) 
+      : [];
+
     // Create menu item
     const menuItem = menuItemRepo.create({
-      location_id,
+      location_id: location_id || null,
       name,
       food_category_id: food_category_id || null,
       food_type_id: food_type_id || null,
       quantity: quantity || null,
-      specification_id: specification_id || null,
-      cook_type_id: cook_type_id || null,
+      specifications: specs,
+      cookTypes: cookTypes,
       description: description || null,
       price: price || 0,
       tags: tags || null,
@@ -256,11 +232,6 @@ const createMenuItem = asyncHandler(async (req, res) => {
     });
     
     const savedMenuItem = await menuItemRepo.save(menuItem);
-    
-    // Fetch the saved item again to get the display_id set by the database trigger
-    const menuItemWithDisplayId = await menuItemRepo.findOne({
-      where: { id: savedMenuItem.id }
-    });
     
     // Add photos
     const createdPhotos = [];
@@ -290,7 +261,9 @@ const createMenuItem = asyncHandler(async (req, res) => {
     res.status(201).json({
       success: true,
       data: {
-        ...menuItemWithDisplayId,
+        ...savedMenuItem,
+        specification_ids: savedMenuItem.specifications?.map(s => s.id) || [],
+        cook_type_ids: savedMenuItem.cookTypes?.map(c => c.id) || [],
         photos: createdPhotos,
         ingredients: createdIngredients
       }
@@ -307,8 +280,8 @@ const updateMenuItem = asyncHandler(async (req, res) => {
     food_category_id,
     food_type_id,
     quantity,
-    specification_id,
-    cook_type_id,
+    specification_ids,
+    cook_type_ids,
     description,
     price,
     tags,
@@ -324,27 +297,42 @@ const updateMenuItem = asyncHandler(async (req, res) => {
     const menuItemRepo = manager.getRepository(MenuItem);
     const photoRepo = manager.getRepository(MenuItemPhoto);
     const ingredientRepo = manager.getRepository(MenuItemIngredient);
+    const specRepo = manager.getRepository(Specification);
+    const cookTypeRepo = manager.getRepository(CookType);
     
-    const menuItem = await menuItemRepo.findOne({ where: { id } });
+    const menuItem = await menuItemRepo.findOne({ 
+      where: { id },
+      relations: ['specifications', 'cookTypes']
+    });
     
     if (!menuItem) {
       throw new AppError('Menu item not found', 404);
     }
     
     // Update menu item fields
-    // Convert empty strings to null for foreign key fields to avoid validation errors
     if (name !== undefined) menuItem.name = name;
     if (food_category_id !== undefined) menuItem.food_category_id = food_category_id || null;
     if (food_type_id !== undefined) menuItem.food_type_id = food_type_id || null;
     if (quantity !== undefined) menuItem.quantity = quantity || null;
-    if (specification_id !== undefined) menuItem.specification_id = specification_id || null;
-    if (cook_type_id !== undefined) menuItem.cook_type_id = cook_type_id || null;
     if (description !== undefined) menuItem.description = description || null;
     if (price !== undefined) menuItem.price = price;
     if (tags !== undefined) menuItem.tags = tags || null;
     if (prep_workout !== undefined) menuItem.prep_workout = prep_workout || null;
     if (status !== undefined) menuItem.status = status;
     
+    // Update relationships if provided
+    if (specification_ids !== undefined) {
+      menuItem.specifications = specification_ids.length > 0 
+        ? await specRepo.findByIds(specification_ids) 
+        : [];
+    }
+    
+    if (cook_type_ids !== undefined) {
+      menuItem.cookTypes = cook_type_ids.length > 0 
+        ? await cookTypeRepo.findByIds(cook_type_ids) 
+        : [];
+    }
+
     await menuItemRepo.save(menuItem);
     
     // Update photos if provided
@@ -360,11 +348,6 @@ const updateMenuItem = asyncHandler(async (req, res) => {
         const saved = await photoRepo.save(photo);
         updatedPhotos.push(saved);
       }
-    } else {
-      updatedPhotos = await photoRepo.find({
-        where: { menu_item_id: id },
-        order: { display_order: 'ASC' }
-      });
     }
     
     // Update ingredients if provided
@@ -381,18 +364,16 @@ const updateMenuItem = asyncHandler(async (req, res) => {
         const saved = await ingredientRepo.save(menuIngredient);
         updatedIngredients.push(saved);
       }
-    } else {
-      updatedIngredients = await ingredientRepo.find({
-        where: { menu_item_id: id }
-      });
     }
     
     res.status(200).json({
       success: true,
       data: {
         ...menuItem,
-        photos: updatedPhotos,
-        ingredients: updatedIngredients
+        specification_ids: menuItem.specifications?.map(s => s.id) || [],
+        cook_type_ids: menuItem.cookTypes?.map(c => c.id) || [],
+        photos: updatedPhotos.length > 0 ? updatedPhotos : undefined, // simplify response
+        ingredients: updatedIngredients.length > 0 ? updatedIngredients : undefined
       }
     });
   });

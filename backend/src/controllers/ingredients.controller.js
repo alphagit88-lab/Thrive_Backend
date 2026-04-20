@@ -10,12 +10,20 @@ const { FoodType } = require('../entities/FoodType.entity');
 const { FoodCategory } = require('../entities/FoodCategory.entity');
 const { Specification } = require('../entities/Specification.entity');
 const { CookType } = require('../entities/CookType.entity');
+const { IngredientPhoto } = require('../entities/IngredientPhoto.entity');
 const { AppError, asyncHandler } = require('../middleware/errorHandler');
+const { Brackets } = require('typeorm');
 
 // @desc    Get all ingredients (with optional filters)
 // @route   GET /api/ingredients
 const getIngredients = asyncHandler(async (req, res) => {
-  const { category_id, food_type_id, is_active } = req.query;
+  let { location_id, category_id, food_type_id, is_active } = req.query;
+  
+  // Robust location_id handling
+  if (location_id === 'null' || location_id === 'undefined' || location_id === '') {
+    location_id = null;
+  }
+
   const dataSource = await getDataSource();
   const ingredientRepo = dataSource.getRepository(Ingredient);
   
@@ -23,15 +31,21 @@ const getIngredients = asyncHandler(async (req, res) => {
     .createQueryBuilder('ingredient')
     .leftJoinAndSelect('ingredient.foodType', 'foodType')
     .leftJoinAndSelect('foodType.category', 'category')
-    .leftJoinAndSelect('ingredient.specification', 'specification')
-    .leftJoinAndSelect('ingredient.cookType', 'cookType')
+    .leftJoinAndSelect('ingredient.specifications', 'specifications')
+    .leftJoinAndSelect('ingredient.cookTypes', 'cookTypes')
     .leftJoinAndSelect('ingredient.quantities', 'quantities')
-    .orderBy('category.display_order', 'ASC')
-    .addOrderBy('foodType.name', 'ASC')
-    .addOrderBy('ingredient.created_at', 'DESC');
+    .leftJoinAndSelect('ingredient.photos', 'photos');
+
+  // Handle location filtering (location specific or global)
+  if (location_id) {
+    queryBuilder.where(new Brackets(qb => {
+      qb.where('ingredient.location_id = :locationId', { locationId: location_id })
+        .orWhere('ingredient.location_id IS NULL');
+    }));
+  }
   
   if (category_id) {
-    queryBuilder.where('category.id = :categoryId', { categoryId: category_id });
+    queryBuilder.andWhere('category.id = :categoryId', { categoryId: category_id });
   }
   
   if (food_type_id) {
@@ -41,6 +55,10 @@ const getIngredients = asyncHandler(async (req, res) => {
   if (is_active !== undefined) {
     queryBuilder.andWhere('ingredient.is_active = :isActive', { isActive: is_active === 'true' });
   }
+
+  queryBuilder.orderBy('category.display_order', 'ASC')
+    .addOrderBy('foodType.name', 'ASC')
+    .addOrderBy('ingredient.created_at', 'DESC');
   
   const ingredients = await queryBuilder.getMany();
   
@@ -50,9 +68,12 @@ const getIngredients = asyncHandler(async (req, res) => {
     food_type_name: ing.foodType?.name,
     category_id: ing.foodType?.category?.id,
     category_name: ing.foodType?.category?.name,
-    specification_name: ing.specification?.name,
-    cook_type_name: ing.cookType?.name,
-    quantities: ing.quantities || []
+    specification_ids: ing.specifications?.map(s => s.id) || [],
+    specification_names: ing.specifications?.map(s => s.name) || [],
+    cook_type_ids: ing.cookTypes?.map(c => c.id) || [],
+    cook_type_names: ing.cookTypes?.map(c => c.name) || [],
+    quantities: ing.quantities || [],
+    photos: ing.photos || []
   }));
   
   res.status(200).json({
@@ -71,7 +92,7 @@ const getIngredient = asyncHandler(async (req, res) => {
   
   const ingredient = await ingredientRepo.findOne({
     where: { id },
-    relations: ['foodType', 'foodType.category', 'specification', 'cookType', 'quantities']
+    relations: ['foodType', 'foodType.category', 'specifications', 'cookTypes', 'quantities', 'photos']
   });
   
   if (!ingredient) {
@@ -84,9 +105,12 @@ const getIngredient = asyncHandler(async (req, res) => {
     food_type_name: ingredient.foodType?.name,
     category_id: ingredient.foodType?.category?.id,
     category_name: ingredient.foodType?.category?.name,
-    specification_name: ingredient.specification?.name,
-    cook_type_name: ingredient.cookType?.name,
-    quantities: ingredient.quantities || []
+    specification_ids: ingredient.specifications?.map(s => s.id) || [],
+    specification_names: ingredient.specifications?.map(s => s.name) || [],
+    cook_type_ids: ingredient.cookTypes?.map(c => c.id) || [],
+    cook_type_names: ingredient.cookTypes?.map(c => c.name) || [],
+    quantities: ingredient.quantities || [],
+    photos: ingredient.photos || []
   };
   
   res.status(200).json({
@@ -99,12 +123,14 @@ const getIngredient = asyncHandler(async (req, res) => {
 // @route   POST /api/ingredients
 const createIngredient = asyncHandler(async (req, res) => {
   const { 
+    location_id,
     food_type_id, 
-    specification_id, 
-    cook_type_id, 
+    specification_ids = [], 
+    cook_type_ids = [], 
     name,
     description,
-    quantities = []
+    quantities = [],
+    photos = []
   } = req.body;
   
   if (!food_type_id) {
@@ -119,12 +145,20 @@ const createIngredient = asyncHandler(async (req, res) => {
     
     // Create ingredient
     const ingredient = ingredientRepo.create({
+      location_id: location_id || null,
       food_type_id,
-      specification_id: specification_id || null,
-      cook_type_id: cook_type_id || null,
       name,
       description
     });
+    
+    // Assign many-to-many relations
+    if (specification_ids.length > 0) {
+      ingredient.specifications = specification_ids.map(id => ({ id }));
+    }
+    
+    if (cook_type_ids.length > 0) {
+      ingredient.cookTypes = cook_type_ids.map(id => ({ id }));
+    }
     
     const savedIngredient = await ingredientRepo.save(ingredient);
     
@@ -142,17 +176,33 @@ const createIngredient = asyncHandler(async (req, res) => {
       createdQuantities.push(saved);
     }
     
+    // Create photos
+    const photoRepo = manager.getRepository(IngredientPhoto);
+    const createdPhotos = [];
+    for (let i = 0; i < photos.length; i++) {
+      const photo = photoRepo.create({
+        ingredient_id: savedIngredient.id,
+        photo_url: photos[i].photo_url || photos[i],
+        display_order: i
+      });
+      const saved = await photoRepo.save(photo);
+      createdPhotos.push(saved);
+    }
+    
     // Fetch full ingredient with relations
     const fullIngredient = await ingredientRepo.findOne({
       where: { id: savedIngredient.id },
-      relations: ['foodType', 'foodType.category', 'specification', 'cookType']
+      relations: ['foodType', 'foodType.category', 'specifications', 'cookTypes']
     });
     
     res.status(201).json({
       success: true,
       data: {
         ...fullIngredient,
-        quantities: createdQuantities
+        specification_ids: fullIngredient.specifications?.map(s => s.id) || [],
+        cook_type_ids: fullIngredient.cookTypes?.map(c => c.id) || [],
+        quantities: createdQuantities,
+        photos: createdPhotos
       }
     });
   });
@@ -163,13 +213,15 @@ const createIngredient = asyncHandler(async (req, res) => {
 const updateIngredient = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { 
+    location_id,
     food_type_id, 
-    specification_id, 
-    cook_type_id, 
+    specification_ids, 
+    cook_type_ids, 
     name,
     description,
     is_active,
-    quantities
+    quantities,
+    photos
   } = req.body;
   
   const dataSource = await getDataSource();
@@ -178,19 +230,30 @@ const updateIngredient = asyncHandler(async (req, res) => {
     const ingredientRepo = manager.getRepository(Ingredient);
     const quantityRepo = manager.getRepository(IngredientQuantity);
     
-    const ingredient = await ingredientRepo.findOne({ where: { id } });
+    const ingredient = await ingredientRepo.findOne({ 
+      where: { id },
+      relations: ['specifications', 'cookTypes']
+    });
     
     if (!ingredient) {
       throw new AppError('Ingredient not found', 404);
     }
     
     // Update ingredient fields
+    if (location_id !== undefined) ingredient.location_id = location_id || null;
     if (food_type_id !== undefined) ingredient.food_type_id = food_type_id;
-    if (specification_id !== undefined) ingredient.specification_id = specification_id;
-    if (cook_type_id !== undefined) ingredient.cook_type_id = cook_type_id;
     if (name !== undefined) ingredient.name = name;
     if (description !== undefined) ingredient.description = description;
     if (is_active !== undefined) ingredient.is_active = is_active;
+    
+    // Update many-to-many relations
+    if (specification_ids !== undefined) {
+      ingredient.specifications = specification_ids.map(id => ({ id }));
+    }
+    
+    if (cook_type_ids !== undefined) {
+      ingredient.cookTypes = cook_type_ids.map(id => ({ id }));
+    }
     
     await ingredientRepo.save(ingredient);
     
@@ -220,17 +283,38 @@ const updateIngredient = asyncHandler(async (req, res) => {
       });
     }
     
+    // Update photos if provided
+    const photoRepo = manager.getRepository(IngredientPhoto);
+    let updatedPhotos = [];
+    if (photos && Array.isArray(photos)) {
+      await photoRepo.delete({ ingredient_id: id });
+      for (let i = 0; i < photos.length; i++) {
+        const photo = photoRepo.create({
+          ingredient_id: id,
+          photo_url: photos[i].photo_url || photos[i],
+          display_order: i
+        });
+        const saved = await photoRepo.save(photo);
+        updatedPhotos.push(saved);
+      }
+    } else {
+      updatedPhotos = await photoRepo.find({ where: { ingredient_id: id }, order: { display_order: 'ASC' } });
+    }
+ 
     // Fetch full ingredient with relations
     const fullIngredient = await ingredientRepo.findOne({
       where: { id },
-      relations: ['foodType', 'foodType.category', 'specification', 'cookType']
+      relations: ['foodType', 'foodType.category', 'specifications', 'cookTypes']
     });
     
     res.status(200).json({
       success: true,
       data: {
         ...fullIngredient,
-        quantities: updatedQuantities
+        specification_ids: fullIngredient.specifications?.map(s => s.id) || [],
+        cook_type_ids: fullIngredient.cookTypes?.map(c => c.id) || [],
+        quantities: updatedQuantities,
+        photos: updatedPhotos
       }
     });
   });
@@ -258,6 +342,13 @@ const deleteIngredient = asyncHandler(async (req, res) => {
 // @desc    Get ingredients grouped by category (for tabs)
 // @route   GET /api/ingredients/by-category
 const getIngredientsByCategory = asyncHandler(async (req, res) => {
+  let { location_id } = req.query;
+
+  // Robust location_id handling
+  if (location_id === 'null' || location_id === 'undefined' || location_id === '') {
+    location_id = null;
+  }
+
   const dataSource = await getDataSource();
   const categoryRepo = dataSource.getRepository(FoodCategory);
   const ingredientRepo = dataSource.getRepository(Ingredient);
@@ -268,10 +359,21 @@ const getIngredientsByCategory = asyncHandler(async (req, res) => {
   });
   
   // Get all ingredients with relations
-  const ingredients = await ingredientRepo.find({
-    relations: ['foodType', 'foodType.category', 'specification', 'cookType'],
-    order: { created_at: 'DESC' }
-  });
+  const queryBuilder = ingredientRepo.createQueryBuilder('ingredient')
+    .leftJoinAndSelect('ingredient.foodType', 'foodType')
+    .leftJoinAndSelect('foodType.category', 'category')
+    .leftJoinAndSelect('ingredient.specifications', 'specifications')
+    .leftJoinAndSelect('ingredient.cookTypes', 'cookTypes')
+    .leftJoinAndSelect('ingredient.photos', 'photos');
+
+  if (location_id) {
+    queryBuilder.where(new Brackets(qb => {
+      qb.where('ingredient.location_id = :locationId', { locationId: location_id })
+        .orWhere('ingredient.location_id IS NULL');
+    }));
+  }
+
+  const ingredients = await queryBuilder.orderBy('ingredient.created_at', 'DESC').getMany();
   
   // Group ingredients by category
   const grouped = categories.map(category => {
@@ -282,8 +384,9 @@ const getIngredientsByCategory = asyncHandler(async (req, res) => {
         name: ing.name,
         food_type_id: ing.foodType?.id,
         food_type_name: ing.foodType?.name,
-        specification_name: ing.specification?.name,
-        cook_type_name: ing.cookType?.name,
+        specification_names: ing.specifications?.map(s => s.name) || [],
+        cook_type_names: ing.cookTypes?.map(c => c.name) || [],
+        photos: ing.photos || [],
         is_active: ing.is_active
       }));
     

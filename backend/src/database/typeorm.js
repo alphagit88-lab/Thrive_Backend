@@ -15,6 +15,7 @@ const { Specification } = require('../entities/Specification.entity');
 const { CookType } = require('../entities/CookType.entity');
 const { Ingredient } = require('../entities/Ingredient.entity');
 const { IngredientQuantity } = require('../entities/IngredientQuantity.entity');
+const { IngredientPhoto } = require('../entities/IngredientPhoto.entity');
 const { MenuItem } = require('../entities/MenuItem.entity');
 const { MenuItemPhoto } = require('../entities/MenuItemPhoto.entity');
 const { MenuItemIngredient } = require('../entities/MenuItemIngredient.entity');
@@ -44,6 +45,7 @@ const AppDataSource = new DataSource({
     CookType,
     Ingredient,
     IngredientQuantity,
+    IngredientPhoto,
     MenuItem,
     MenuItemPhoto,
     MenuItemIngredient,

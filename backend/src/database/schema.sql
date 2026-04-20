@@ -101,14 +101,35 @@ CREATE TABLE cook_types (
 
 CREATE TABLE ingredients (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    location_id UUID REFERENCES locations(id) ON DELETE CASCADE,
     food_type_id UUID NOT NULL REFERENCES food_types(id) ON DELETE CASCADE,
-    specification_id UUID REFERENCES specifications(id) ON DELETE SET NULL,
-    cook_type_id UUID REFERENCES cook_types(id) ON DELETE SET NULL,
     name VARCHAR(255),
     description TEXT,
     is_active BOOLEAN DEFAULT true,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE ingredient_photos (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    ingredient_id UUID NOT NULL REFERENCES ingredients(id) ON DELETE CASCADE,
+    photo_url TEXT NOT NULL,
+    display_order INTEGER DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE ingredient_specifications (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    ingredient_id UUID NOT NULL REFERENCES ingredients(id) ON DELETE CASCADE,
+    specification_id UUID NOT NULL REFERENCES specifications(id) ON DELETE CASCADE,
+    UNIQUE(ingredient_id, specification_id)
+);
+
+CREATE TABLE ingredient_cook_types (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    ingredient_id UUID NOT NULL REFERENCES ingredients(id) ON DELETE CASCADE,
+    cook_type_id UUID NOT NULL REFERENCES cook_types(id) ON DELETE CASCADE,
+    UNIQUE(ingredient_id, cook_type_id)
 );
 
 -- =============================================

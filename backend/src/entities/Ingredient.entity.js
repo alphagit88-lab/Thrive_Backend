@@ -13,16 +13,12 @@ const Ingredient = new EntitySchema({
       primary: true,
       generated: 'uuid'
     },
+    location_id: {
+      type: 'uuid',
+      nullable: true // Set to true for backward compatibility or global ingredients if needed
+    },
     food_type_id: {
       type: 'uuid'
-    },
-    specification_id: {
-      type: 'uuid',
-      nullable: true
-    },
-    cook_type_id: {
-      type: 'uuid',
-      nullable: true
     },
     name: {
       type: 'varchar',
@@ -47,6 +43,14 @@ const Ingredient = new EntitySchema({
     }
   },
   relations: {
+    location: {
+      type: 'many-to-one',
+      target: 'Location',
+      joinColumn: {
+        name: 'location_id'
+      },
+      onDelete: 'CASCADE'
+    },
     foodType: {
       type: 'many-to-one',
       target: 'FoodType',
@@ -55,27 +59,32 @@ const Ingredient = new EntitySchema({
       },
       onDelete: 'CASCADE'
     },
-    specification: {
-      type: 'many-to-one',
+    specifications: {
+      type: 'many-to-many',
       target: 'Specification',
-      joinColumn: {
-        name: 'specification_id'
-      },
-      onDelete: 'SET NULL',
-      nullable: true
+      joinTable: {
+        name: 'ingredient_specifications',
+        joinColumn: { name: 'ingredient_id', referencedColumnName: 'id' },
+        inverseJoinColumn: { name: 'specification_id', referencedColumnName: 'id' }
+      }
     },
-    cookType: {
-      type: 'many-to-one',
+    cookTypes: {
+      type: 'many-to-many',
       target: 'CookType',
-      joinColumn: {
-        name: 'cook_type_id'
-      },
-      onDelete: 'SET NULL',
-      nullable: true
+      joinTable: {
+        name: 'ingredient_cook_types',
+        joinColumn: { name: 'ingredient_id', referencedColumnName: 'id' },
+        inverseJoinColumn: { name: 'cook_type_id', referencedColumnName: 'id' }
+      }
     },
     quantities: {
       type: 'one-to-many',
       target: 'IngredientQuantity',
+      inverseSide: 'ingredient'
+    },
+    photos: {
+      type: 'one-to-many',
+      target: 'IngredientPhoto',
       inverseSide: 'ingredient'
     }
   }
