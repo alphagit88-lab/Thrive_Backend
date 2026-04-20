@@ -7,6 +7,7 @@ const express = require('express');
 const cors = require('cors');
 const { errorHandler } = require('./middleware/errorHandler');
 const { getLocationFilter } = require('./middleware/auth');
+const path = require('path');
 
 const app = express();
 
@@ -59,6 +60,10 @@ app.use('/api/menu', require('./routes/menu.routes'));
 app.use('/api/orders', require('./routes/orders.routes'));
 app.use('/api/customers', require('./routes/customers.routes'));
 app.use('/api/users', require('./routes/users.routes'));
+app.use('/api/upload', require('./routes/upload.routes')); // New upload route
+
+// Serve static files from the public directory
+app.use('/uploads', express.static(path.join(__dirname, '../public/uploads')));
 
 // Health check / Test route
 app.get('/api/health', (req, res) => {
