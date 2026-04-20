@@ -19,10 +19,10 @@ const { Brackets } = require('typeorm');
 const getIngredients = asyncHandler(async (req, res) => {
   let { location_id, category_id, food_type_id, is_active } = req.query;
   
-  // Robust location_id handling
-  if (location_id === 'null' || location_id === 'undefined' || location_id === '') {
-    location_id = null;
-  }
+  // Robust ID normalization
+  if (location_id === 'null' || location_id === 'undefined' || location_id === '') location_id = null;
+  if (category_id === 'null' || category_id === 'undefined' || category_id === '') category_id = null;
+  if (food_type_id === 'null' || food_type_id === 'undefined' || food_type_id === '') food_type_id = null;
 
   const dataSource = await getDataSource();
   const ingredientRepo = dataSource.getRepository(Ingredient);

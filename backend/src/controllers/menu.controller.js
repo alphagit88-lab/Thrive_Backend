@@ -19,8 +19,12 @@ const { AppError, asyncHandler } = require('../middleware/errorHandler');
 // @desc    Get all menu items (filtered by location)
 // @route   GET /api/menu
 const getMenuItems = asyncHandler(async (req, res) => {
-  const { location_id, status, search, category_id } = req.query;
+  let { location_id, status, search, category_id } = req.query;
   
+  // Normalize IDs
+  if (location_id === 'null' || location_id === 'undefined' || location_id === '') location_id = null;
+  if (category_id === 'null' || category_id === 'undefined' || category_id === '') category_id = null;
+
   if (!location_id) {
     throw new AppError('Location ID is required', 400);
   }

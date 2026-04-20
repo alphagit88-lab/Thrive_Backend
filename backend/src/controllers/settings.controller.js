@@ -15,8 +15,13 @@ const { AppError, asyncHandler } = require('../middleware/errorHandler');
 // ==================== FOOD CATEGORIES ====================
 
 const getCategories = asyncHandler(async (req, res) => {
-  const { location_id } = req.query;
-  console.log('--- getCategories called with location_id:', location_id);
+  let { location_id } = req.query;
+  
+  // Normalize location_id
+  if (location_id === 'null' || location_id === 'undefined' || location_id === '') {
+    location_id = null;
+  }
+  
   const dataSource = await getDataSource();
   const categoryRepo = dataSource.getRepository(FoodCategory);
 
@@ -141,8 +146,13 @@ const deleteCategory = asyncHandler(async (req, res) => {
 
 // ==================== FOOD TYPES ====================
 
-const getTypes = asyncHandler(async (req, res) => {
-  const { category_id, location_id } = req.query;
+const getFoodTypes = asyncHandler(async (req, res) => {
+  let { category_id, location_id } = req.query;
+
+  // Normalize IDs
+  if (location_id === 'null' || location_id === 'undefined' || location_id === '') location_id = null;
+  if (category_id === 'null' || category_id === 'undefined' || category_id === '') category_id = null;
+
   const dataSource = await getDataSource();
   const typeRepo = dataSource.getRepository(FoodType);
 
@@ -275,7 +285,12 @@ const deleteType = asyncHandler(async (req, res) => {
 // ==================== SPECIFICATIONS ====================
 
 const getSpecifications = asyncHandler(async (req, res) => {
-  const { food_type_id, location_id } = req.query;
+  let { food_type_id, location_id } = req.query;
+
+  // Normalize IDs
+  if (location_id === 'null' || location_id === 'undefined' || location_id === '') location_id = null;
+  if (food_type_id === 'null' || food_type_id === 'undefined' || food_type_id === '') food_type_id = null;
+
   const dataSource = await getDataSource();
   const specRepo = dataSource.getRepository(Specification);
 
@@ -381,7 +396,12 @@ const deleteSpecification = asyncHandler(async (req, res) => {
 // ==================== COOK TYPES ====================
 
 const getCookTypes = asyncHandler(async (req, res) => {
-  const { category_id, location_id } = req.query;
+  let { category_id, location_id } = req.query;
+
+  // Normalize IDs
+  if (location_id === 'null' || location_id === 'undefined' || location_id === '') location_id = null;
+  if (category_id === 'null' || category_id === 'undefined' || category_id === '') category_id = null;
+
   const dataSource = await getDataSource();
   const cookTypeRepo = dataSource.getRepository(CookType);
 
