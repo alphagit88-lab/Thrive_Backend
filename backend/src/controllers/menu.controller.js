@@ -211,20 +211,29 @@ const createMenuItem = asyncHandler(async (req, res) => {
     const specRepo = manager.getRepository(Specification);
     const cookTypeRepo = manager.getRepository(CookType);
     
+    // Normalize foreign keys
+    const normLocId = (location_id && location_id !== '' && location_id !== 'null' && location_id !== 'undefined') ? location_id : null;
+    const normCatId = (food_category_id && food_category_id !== '' && food_category_id !== 'null' && food_category_id !== 'undefined') ? food_category_id : null;
+    const normTypeId = (food_type_id && food_type_id !== '' && food_type_id !== 'null' && food_type_id !== 'undefined') ? food_type_id : null;
+
+    // Filter valid relation IDs
+    const validSpecIds = Array.isArray(specification_ids) ? specification_ids.filter(id => id && id !== '' && id !== 'null' && id !== 'undefined') : [];
+    const validCookIds = Array.isArray(cook_type_ids) ? cook_type_ids.filter(id => id && id !== '' && id !== 'null' && id !== 'undefined') : [];
+
     // Fetch specs and cook types to associate
-    const specs = specification_ids.length > 0 
-      ? await specRepo.findByIds(specification_ids) 
+    const specs = validSpecIds.length > 0 
+      ? await specRepo.findByIds(validSpecIds) 
       : [];
-    const cookTypes = cook_type_ids.length > 0 
-      ? await cookTypeRepo.findByIds(cook_type_ids) 
+    const cookTypes = validCookIds.length > 0 
+      ? await cookTypeRepo.findByIds(validCookIds) 
       : [];
 
     // Create menu item
     const menuItem = menuItemRepo.create({
-      location_id: location_id || null,
+      location_id: normLocId,
       name,
-      food_category_id: food_category_id || null,
-      food_type_id: food_type_id || null,
+      food_category_id: normCatId,
+      food_type_id: normTypeId,
       quantity: quantity || null,
       specifications: specs,
       cookTypes: cookTypes,
@@ -312,28 +321,35 @@ const updateMenuItem = asyncHandler(async (req, res) => {
     if (!menuItem) {
       throw new AppError('Menu item not found', 404);
     }
-    
-    // Update menu item fields
+    if (location_id !== undefined) {
+      menuItem.location_id = (location_id && location_id !== '' && location_id !== 'null' && location_id !== 'undefined') ? location_id : null;
+    }
     if (name !== undefined) menuItem.name = name;
-    if (food_category_id !== undefined) menuItem.food_category_id = food_category_id || null;
-    if (food_type_id !== undefined) menuItem.food_type_id = food_type_id || null;
+    if (food_category_id !== undefined) {
+      menuItem.food_category_id = (food_category_id && food_category_id !== '' && food_category_id !== 'null' && food_category_id !== 'undefined') ? food_category_id : null;
+    }
+    if (food_type_id !== undefined) {
+      menuItem.food_type_id = (food_type_id && food_type_id !== '' && food_type_id !== 'null' && food_type_id !== 'undefined') ? food_type_id : null;
+    }
     if (quantity !== undefined) menuItem.quantity = quantity || null;
     if (description !== undefined) menuItem.description = description || null;
-    if (price !== undefined) menuItem.price = price;
+    if (price !== undefined) menuItem.price = price || 0;
     if (tags !== undefined) menuItem.tags = tags || null;
     if (prep_workout !== undefined) menuItem.prep_workout = prep_workout || null;
     if (status !== undefined) menuItem.status = status;
     
-    // Update relationships if provided
+    // Update relationships
     if (specification_ids !== undefined) {
-      menuItem.specifications = specification_ids.length > 0 
-        ? await specRepo.findByIds(specification_ids) 
+      const validSpecIds = Array.isArray(specification_ids) ? specification_ids.filter(id => id && id !== '' && id !== 'null' && id !== 'undefined') : [];
+      menuItem.specifications = validSpecIds.length > 0 
+        ? await manager.getRepository(Specification).findByIds(validSpecIds)
         : [];
     }
     
     if (cook_type_ids !== undefined) {
-      menuItem.cookTypes = cook_type_ids.length > 0 
-        ? await cookTypeRepo.findByIds(cook_type_ids) 
+      const validCookIds = Array.isArray(cook_type_ids) ? cook_type_ids.filter(id => id && id !== '' && id !== 'null' && id !== 'undefined') : [];
+      menuItem.cookTypes = validCookIds.length > 0
+        ? await manager.getRepository(CookType).findByIds(validCookIds)
         : [];
     }
 

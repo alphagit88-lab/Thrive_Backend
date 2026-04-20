@@ -134,8 +134,12 @@ const createIngredient = asyncHandler(async (req, res) => {
     photos = []
   } = req.body;
   
-  if (!food_type_id) {
-    throw new AppError('Food type ID is required', 400);
+  // Normalize IDs that may be stringified nulls from frontend
+  const normalizedFoodTypeId = (food_type_id && food_type_id !== '' && food_type_id !== 'null' && food_type_id !== 'undefined') ? food_type_id : null;
+  const normalizedLocationId = (location_id && location_id !== '' && location_id !== 'null' && location_id !== 'undefined') ? location_id : null;
+  
+  if (!normalizedFoodTypeId) {
+    throw new AppError('Food type ID is required and must be valid', 400);
   }
   
   const dataSource = await getDataSource();
@@ -146,19 +150,21 @@ const createIngredient = asyncHandler(async (req, res) => {
     
     // Create ingredient
     const ingredient = ingredientRepo.create({
-      location_id: (location_id && location_id !== '' && location_id !== 'null' && location_id !== 'undefined') ? location_id : null,
-      food_type_id,
+      location_id: normalizedLocationId,
+      food_type_id: normalizedFoodTypeId,
       name,
       description
     });
     
-    // Assign many-to-many relations
-    if (specification_ids.length > 0) {
-      ingredient.specifications = specification_ids.map(id => ({ id }));
+    // Assign many-to-many relations (filter out invalid IDs)
+    if (specification_ids && specification_ids.length > 0) {
+      const validSpecIds = specification_ids.filter(id => id && id !== '' && id !== 'null' && id !== 'undefined');
+      ingredient.specifications = validSpecIds.map(id => ({ id }));
     }
     
-    if (cook_type_ids.length > 0) {
-      ingredient.cookTypes = cook_type_ids.map(id => ({ id }));
+    if (cook_type_ids && cook_type_ids.length > 0) {
+      const validCookIds = cook_type_ids.filter(id => id && id !== '' && id !== 'null' && id !== 'undefined');
+      ingredient.cookTypes = validCookIds.map(id => ({ id }));
     }
     
     const savedIngredient = await ingredientRepo.save(ingredient);
@@ -244,18 +250,22 @@ const updateIngredient = asyncHandler(async (req, res) => {
     if (location_id !== undefined) {
       ingredient.location_id = (location_id && location_id !== '' && location_id !== 'null' && location_id !== 'undefined') ? location_id : null;
     }
-    if (food_type_id !== undefined) ingredient.food_type_id = food_type_id;
+    if (food_type_id !== undefined) {
+      ingredient.food_type_id = (food_type_id && food_type_id !== '' && food_type_id !== 'null' && food_type_id !== 'undefined') ? food_type_id : null;
+    }
     if (name !== undefined) ingredient.name = name;
     if (description !== undefined) ingredient.description = description;
     if (is_active !== undefined) ingredient.is_active = is_active;
     
     // Update many-to-many relations
     if (specification_ids !== undefined) {
-      ingredient.specifications = specification_ids.map(id => ({ id }));
+      const validSpecIds = Array.isArray(specification_ids) ? specification_ids.filter(id => id && id !== '' && id !== 'null' && id !== 'undefined') : [];
+      ingredient.specifications = validSpecIds.map(id => ({ id }));
     }
     
     if (cook_type_ids !== undefined) {
-      ingredient.cookTypes = cook_type_ids.map(id => ({ id }));
+      const validCookIds = Array.isArray(cook_type_ids) ? cook_type_ids.filter(id => id && id !== '' && id !== 'null' && id !== 'undefined') : [];
+      ingredient.cookTypes = validCookIds.map(id => ({ id }));
     }
     
     await ingredientRepo.save(ingredient);
