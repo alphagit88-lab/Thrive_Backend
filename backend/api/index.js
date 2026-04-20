@@ -30,6 +30,12 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(getLocationFilter);
 
+// Debug logging middleware
+app.use((req, res, next) => {
+    console.log(`[DEBUG] ${req.method} ${req.url} - Original: ${req.originalUrl}`);
+    next();
+});
+
 // Root endpoint
 app.get('/', (req, res) => {
     res.json({
@@ -56,6 +62,10 @@ app.use('/api/menu', require('../src/routes/menu.routes'));
 app.use('/api/orders', require('../src/routes/orders.routes'));
 app.use('/api/customers', require('../src/routes/customers.routes'));
 app.use('/api/users', require('../src/routes/users.routes'));
+app.use('/api/upload', require('../src/routes/upload.routes'));
+app.use('/upload', require('../src/routes/upload.routes'));
+
+app.get('/ping', (req, res) => res.send('pong'));
 
 // Database test endpoint
 const pool = require('../src/database/dbconn');
@@ -83,7 +93,7 @@ app.use('/api/test/typeorm', require('../src/routes/test-typeorm.routes'));
 app.use((req, res) => {
     res.status(404).json({
         success: false,
-        error: `Route ${req.originalUrl} not found`
+        error: `Route ${req.method} ${req.originalUrl} not found`
     });
 });
 

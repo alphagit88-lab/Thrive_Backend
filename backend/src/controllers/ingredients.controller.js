@@ -40,7 +40,8 @@ const getIngredients = asyncHandler(async (req, res) => {
   if (location_id) {
     queryBuilder.where(new Brackets(qb => {
       qb.where('ingredient.location_id = :locationId', { locationId: location_id })
-        .orWhere('ingredient.location_id IS NULL');
+        .orWhere('ingredient.location_id IS NULL')
+        .orWhere("ingredient.location_id = ''");
     }));
   }
   
@@ -145,7 +146,7 @@ const createIngredient = asyncHandler(async (req, res) => {
     
     // Create ingredient
     const ingredient = ingredientRepo.create({
-      location_id: location_id || null,
+      location_id: (location_id && location_id !== '' && location_id !== 'null' && location_id !== 'undefined') ? location_id : null,
       food_type_id,
       name,
       description
@@ -240,7 +241,9 @@ const updateIngredient = asyncHandler(async (req, res) => {
     }
     
     // Update ingredient fields
-    if (location_id !== undefined) ingredient.location_id = location_id || null;
+    if (location_id !== undefined) {
+      ingredient.location_id = (location_id && location_id !== '' && location_id !== 'null' && location_id !== 'undefined') ? location_id : null;
+    }
     if (food_type_id !== undefined) ingredient.food_type_id = food_type_id;
     if (name !== undefined) ingredient.name = name;
     if (description !== undefined) ingredient.description = description;
