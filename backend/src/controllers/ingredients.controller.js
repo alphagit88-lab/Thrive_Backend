@@ -40,8 +40,7 @@ const getIngredients = asyncHandler(async (req, res) => {
   if (location_id) {
     queryBuilder.where(new Brackets(qb => {
       qb.where('ingredient.location_id = :locationId', { locationId: location_id })
-        .orWhere('ingredient.location_id IS NULL')
-        .orWhere("ingredient.location_id = ''");
+        .orWhere('ingredient.location_id IS NULL');
     }));
   }
   
