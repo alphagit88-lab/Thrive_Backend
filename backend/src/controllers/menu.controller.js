@@ -289,6 +289,7 @@ const createMenuItem = asyncHandler(async (req, res) => {
 const updateMenuItem = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const {
+    location_id,
     name,
     food_category_id,
     food_type_id,
